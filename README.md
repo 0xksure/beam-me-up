@@ -50,8 +50,8 @@ of pure, deterministic tools it can call along the way.
 
 ## What M0 is
 
-M0 is a single TypeScript package (ESM, Node 20+) that exposes, over the MCP
-protocol:
+M0 is the runnable skeleton (ESM, Node 20+; M6 later split the codebase into the
+`packages/*` monorepo) that exposes, over the MCP protocol:
 
 - **1 prompt** — `beam_me_up`: returns the ordered, numbered orchestration plan
   the host AI follows. Each step is tagged `[HOST-AI]`, `[MCP-TOOL: <name>]`, or
@@ -118,9 +118,9 @@ carry a verified bearer token. See
 ## Other scripts
 
 ```bash
-npm run typecheck        # tsc --noEmit
-npm run build            # tsc -> dist/
-npm test                 # tsx src/smoke-test.ts (M0 in-memory client test)
+npm run typecheck        # tsc --noEmit -p tsconfig.json (whole workspace)
+npm run build            # tsc -b tsconfig.solution.json -> per-package dist/
+npm test                 # tsx packages/server/src/smoke-test.ts (in-memory client test)
 npm run test:m1          # tsx test/m1.test.ts (M1 deploy tests, mocked Vercel API)
 npm run test:m2          # tsx test/m2.test.ts (M2 DB-provision tests, mocked Neon/Upstash APIs)
 npm run test:m3          # tsx test/m3.test.ts (M3 preflight_scan tests, pure / no network)
@@ -155,8 +155,8 @@ plan, calling `route_target`, `validate_compose`, and `write_todo` as it goes.
 
 M1 makes the deploy step **live for Vercel**. The server now exposes four
 additional tools, all routed through a single pluggable `DeployTarget` adapter
-(`src/adapters/deploy/interface.ts`); the Vercel implementation lives under
-`src/adapters/deploy/vercel/`:
+(`packages/adapters/src/deploy/interface.ts`); the Vercel implementation lives
+under `packages/adapters/src/deploy/vercel/`:
 
 - **`create_deploy_target`** — create the Vercel project (`POST /v10/projects`)
   and return its `targetId` + dashboard URL.
