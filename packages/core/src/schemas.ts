@@ -128,6 +128,9 @@ export const writeTodoInputShape = {
   target: DeployTargetIdSchema,
   authNeeded: z.boolean(),
   mode: z.enum(["product", "internal"]).optional(),
+  /** Detected database engines (e.g. ["postgres"]) so the checklist + operate
+   *  guidance can tailor DB-specific items (connection string, TLS, firewall). */
+  databases: z.array(z.string()).optional(),
   manualItems: z.array(z.string()).optional(),
   securityFollowups: z.array(z.string()).optional(),
   liveUrl: z.string().optional(),
@@ -141,6 +144,41 @@ export const writeTodoOutputShape = {
 } as const;
 export const WriteTodoOutputSchema = z.object(writeTodoOutputShape);
 export type WriteTodoOutput = z.infer<typeof WriteTodoOutputSchema>;
+
+/* ------------------------------------------------------------------ */
+/* check_credentials (capability check)                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * check_credentials reports which provider credentials are present in the
+ * SERVER's environment, so the host AI can route around missing providers
+ * BEFORE doing expensive work (building images, provisioning). It reports
+ * booleans only — credential values are never read out or echoed.
+ */
+export const checkCredentialsInputShape = {} as const;
+export const CheckCredentialsInputSchema = z.object(checkCredentialsInputShape);
+export type CheckCredentialsInput = z.infer<typeof CheckCredentialsInputSchema>;
+
+export const checkCredentialsOutputShape = {
+  /** Vercel deploys (VERCEL_TOKEN). */
+  vercel: z.boolean(),
+  /** DigitalOcean deploys (DIGITALOCEAN_TOKEN). */
+  digitalocean: z.boolean(),
+  /** Postgres provisioning via Neon (NEON_API_KEY). */
+  neon: z.boolean(),
+  /** Redis provisioning via Upstash (UPSTASH_EMAIL + UPSTASH_API_KEY). */
+  upstash: z.boolean(),
+  /** Capability names that ARE configured (a convenience for the planner). */
+  configured: z.array(z.string()),
+  /** Capability names that are NOT configured, with the env var(s) to set. */
+  missing: z.array(z.string()),
+} as const;
+export const CheckCredentialsOutputSchema = z.object(
+  checkCredentialsOutputShape,
+);
+export type CheckCredentialsOutput = z.infer<
+  typeof CheckCredentialsOutputSchema
+>;
 
 /* ------------------------------------------------------------------ */
 /* beam_me_up prompt                                                   */

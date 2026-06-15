@@ -28,6 +28,7 @@
  * vercel (M1) and digitalocean (M4, App Platform container-image deploys).
  */
 const LIVE_TOOLS = [
+  "check_credentials",
   "preflight_scan",
   "route_target",
   "validate_compose",
@@ -104,6 +105,18 @@ set env vars, deploy, and read build logs are all live MCP tools — \`vercel\`
 ---
 
 ## The plan
+
+### 0. [MCP-TOOL: check_credentials] What can we actually ship with? — **LIVE**
+Call **\`check_credentials\`** FIRST (no input). It returns booleans for
+\`vercel\` / \`digitalocean\` / \`neon\` / \`upstash\` plus \`configured\` /
+\`missing\`, read from the server's environment (values are never echoed).
+- Use it to **route around gaps before doing expensive work.** If the provider
+  you'd route to (or the DB you'd provision) is in \`missing\`, tell the user
+  up front which env var to set (e.g. \`DIGITALOCEAN_TOKEN\`, \`NEON_API_KEY\`)
+  and either pause for it or fall back to the provider's CLI (\`doctl\`,
+  \`vercel\`, \`neonctl\`) — don't discover the gap after you've built an image.
+- The pure analysis steps (1–6) work with zero credentials, so you can still
+  preflight + route while waiting on tokens.
 
 ### 1. [HOST-AI] Inventory the repo
 Use your own file tools to understand the project before touching anything.
@@ -196,6 +209,12 @@ vars. Call **\`provision_database\`** with \`{ engine, name, region? }\`:
   into \`set_env_vars\` (step 9)** so the app can reach its database. Credentials
   are never echoed back; if a required env var is unset the tool returns a clear
   error naming it.
+- **TLS gotcha when wiring \`DATABASE_URL\` into a Node \`pg\` app:** a modern
+  \`pg\` client treats \`sslmode=require\` strictly and can reject a managed-PG
+  self-signed CA ("self-signed certificate in certificate chain"). Neon's URL
+  uses a real CA so it works as-is; for a self-hosted / DigitalOcean managed
+  Postgres, use the provider's CA cert or set the client
+  \`ssl: { rejectUnauthorized: false }\` (\`sslmode=no-verify\`).
 - Other engines (MySQL/Mongo) are not wired in M2: the tool returns "M2 supports
   postgres (Neon) and redis (Upstash) only." For those, use the manual fallback
   ([HOST-AI] + user): create the DB in the provider dashboard and capture the
@@ -229,12 +248,25 @@ The deploy *source* depends on the provider:
   \`files\` (\`{ path, content }\` for text, or \`{ path, contentBase64 }\` for
   binary): \`deploy { provider: "vercel", targetId, projectName, framework?,
   files, target? }\`.
-- **DigitalOcean** — [HOST-AI] build the container image from the repo's
-  \`Dockerfile\` and push it to a registry (DOCR / Docker Hub / GHCR) with your
-  own tools, then \`deploy { provider: "digitalocean", targetId, projectName,
-  image }\` where \`image\` is the pushed reference, e.g.
-  \`"registry.digitalocean.com/myreg/web:1.2.3"\`. DO App Platform pulls + rolls
-  it out (it does not accept uploaded files).
+- **DigitalOcean** — [HOST-AI] build + push the image yourself, then
+  \`deploy { provider: "digitalocean", targetId, projectName, image }\`. The
+  build/push is the single most error-prone step, so do it precisely:
+  - **Registry name (DOCR):** get it with \`doctl registry get\` — its
+    \`Endpoint\` is \`registry.digitalocean.com/<name>\`, so the image ref is
+    \`registry.digitalocean.com/<name>/<repo>:<tag>\`. Pin a real \`<tag>\` (a
+    version or git SHA), **not \`latest\`**, so redeploys are reproducible.
+  - **Auth, then build for the RIGHT architecture + push:** App Platform runs
+    **linux/amd64**, so on Apple Silicon you MUST cross-build:
+    \`doctl registry login\` then
+    \`docker buildx build --platform linux/amd64 -t <ref> --push .\`
+  - Then \`deploy { provider: "digitalocean", targetId, projectName, image: "<ref>" }\`.
+    DO pulls + rolls it out (it does not accept uploaded files); \`image\` may be a
+    DOCR / Docker Hub / GHCR ref.
+  - **If the app uses a managed database, bind it** so DigitalOcean auto-manages
+    the firewall: attach the DB as an app component (\`databases:\` section +
+    reference \`\${db.DATABASE_URL}\` in the env) instead of a raw \`DATABASE_URL\`
+    secret. A raw secret leaves the cluster's **trusted sources** manual — the app
+    cannot reach the DB until you add it by hand.
 - It returns \`{ deploymentId, url?, status }\`. Capture the **live URL** and the
   \`deploymentId\` (you need it for step 11). The initial status is
   queued/building; use \`get_deploy_logs\` to follow the build to ready or error.
@@ -249,9 +281,14 @@ Reads build logs so you can confirm success or diagnose a failed deploy. Call
 
 ### 12. [MCP-TOOL: write_todo] Generate TODO.md + ship checklist
 Now produce the user's handoff document. Call **\`write_todo\`** with:
-\`{ stack, target, authNeeded, mode: "${mode}", manualItems?, securityFollowups?, liveUrl? }\`
+\`{ stack, target, authNeeded, mode: "${mode}", databases?, manualItems?, securityFollowups?, liveUrl? }\`
 - \`target\` = the \`DeployTargetId\` confirmed in step 6.
 - \`authNeeded\` = true if the app has (or should have) sign-in.
+- \`databases\` = the engines from \`preflight_scan\`'s \`stack.databases\` (e.g.
+  \`["postgres"]\`). The checklist + Operate notes tailor to this — DB connection
+  string, the managed-PG TLS footgun, and (on DigitalOcean) the trusted-sources
+  binding only appear when a database is present. The checklist is now tailored:
+  OAuth only when \`authNeeded\`, the allowlist only for internal mode, etc.
 - \`securityFollowups\` = the list you accumulated in steps 2–3.
 - \`liveUrl\` = the URL from step 10 if you have one.
 - It returns \`todoMarkdown\` (with **Manual setup**, **Security follow-ups**,

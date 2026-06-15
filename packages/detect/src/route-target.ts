@@ -140,9 +140,11 @@ function computeContainerConfidence(
     confidence = singleSignalConfidence(signals);
   }
 
-  // A Dockerfile corroborates a container deploy -> nudge up.
+  // A Dockerfile is strong corroboration once we've already decided container:
+  // the author packaged the app to run as a container. Boost meaningfully (a
+  // Dockerfile + a port listener is a slam-dunk container deploy, ~0.9).
   if (signals.hasDockerfile) {
-    confidence = Math.min(1, confidence + 0.03);
+    confidence = Math.min(1, confidence + 0.2);
   }
 
   // Serverless-first framework + only weak container evidence = mixed signal.
@@ -165,7 +167,9 @@ function singleSignalConfidence(signals: RepoSignals): number {
   if (signals.persistentFsWrites) return 0.8;
   if (signals.composeAppServices > 1) return 0.82;
   if (signals.longHandlers) return 0.65; // heuristic, can false-positive
-  if (signals.listensOnPort) return 0.6; // weakest: lots of apps "listen" locally
+  // A persistent port listener is a solid always-on signal (serverless
+  // functions don't app.listen); softer than ws/workers but still real.
+  if (signals.listensOnPort) return 0.7;
   return 0.7;
 }
 

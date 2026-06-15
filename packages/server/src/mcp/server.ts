@@ -1,6 +1,6 @@
 /**
  * createServer - builds the Beam Me Up McpServer, registering the one prompt
- * and three pure tools, wiring each to its pure function.
+ * and the tools, wiring each to its function.
  *
  * SDK: @modelcontextprotocol/sdk (verified against v1.29.0).
  *   - server.registerTool(name, { title, description, inputSchema, outputSchema }, cb)
@@ -13,6 +13,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import {
   beamMeUpPromptArgsShape,
+  checkCredentialsInputShape,
+  checkCredentialsOutputShape,
   routeTargetInputShape,
   routeTargetOutputShape,
   validateComposeInputShape,
@@ -33,6 +35,7 @@ import {
   provisionDatabaseOutputShape,
 } from "@beam-me-up/core";
 import { renderBeamMeUpPlan } from "@beam-me-up/tools";
+import { checkCredentials } from "@beam-me-up/tools";
 import { routeTarget } from "@beam-me-up/detect";
 import { validateCompose } from "@beam-me-up/tools";
 import { writeTodo } from "@beam-me-up/tools";
@@ -102,6 +105,28 @@ export function createServer(): McpServer {
             content: { type: "text" as const, text },
           },
         ],
+      };
+    },
+  );
+
+  /* ---- tool: check_credentials ---------------------------------- */
+  server.registerTool(
+    "check_credentials",
+    {
+      title: "Check provider credentials",
+      description:
+        "Report which provider credentials are present in the server's " +
+        "environment (vercel / digitalocean / neon / upstash) as booleans, so " +
+        "you can route around missing providers BEFORE building images or " +
+        "provisioning. Call this early. Values are never read out or echoed.",
+      inputSchema: checkCredentialsInputShape,
+      outputSchema: checkCredentialsOutputShape,
+    },
+    () => {
+      const result = checkCredentials();
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
       };
     },
   );

@@ -17,70 +17,81 @@ function redirectUri(liveUrl: string | undefined, provider: string): string {
 }
 
 /**
- * shipChecklist - the standard ship-checklist items for the given input.
- *
- * Per the locked decision, NOTHING hard-blocks (blocking:false everywhere) and
- * all items start unchecked (done:false). Mode-sensitive labels (the allowlist
- * item) adapt to product vs internal.
+ * shipChecklist - the ship-checklist items TAILORED to the input, rather than a
+ * fixed template. Items are included only when they apply: OAuth only when
+ * authNeeded, the allowlist only for internal mode, access-control review only
+ * when there are findings, and the DB items (connection string, the managed-PG
+ * TLS footgun, the DigitalOcean trusted-sources binding) only when a database is
+ * detected. NOTHING hard-blocks (blocking:false everywhere); all start unchecked.
  */
 export function shipChecklist(input: WriteTodoInput): ChecklistItem[] {
   const mode = input.mode ?? "product";
+  const databases = input.databases ?? [];
+  const hasDb = databases.length > 0;
+  const hasSqlDb = databases.some((d) => /postgres|mysql|maria/i.test(d));
+  const hasFindings = (input.securityFollowups ?? []).length > 0;
 
-  const allowlistLabel =
-    mode === "internal"
-      ? "Confirm ALLOWED_EMAILS/ALLOWED_DOMAIN for internal mode (lock the allowlist)"
-      : "Confirm ALLOWED_EMAILS/ALLOWED_DOMAIN for the mode";
+  const items: ChecklistItem[] = [];
+  const add = (id: string, label: string): void => {
+    items.push({ id, label, done: false, blocking: false });
+  };
 
-  const items: ChecklistItem[] = [
-    {
-      id: "rotate-secrets",
-      label: "Rotate any committed secrets",
-      done: false,
-      blocking: false,
-    },
-    {
-      id: "register-oauth",
-      label: "Register OAuth app(s) and paste CLIENT_ID/CLIENT_SECRET",
-      done: false,
-      blocking: false,
-    },
-    {
-      id: "allowlist",
-      label: allowlistLabel,
-      done: false,
-      blocking: false,
-    },
-    {
-      id: "review-access-control",
-      label: "Review RLS / access-control findings",
-      done: false,
-      blocking: false,
-    },
-    {
-      id: "apply-cve-upgrades",
-      label: "Apply outstanding CVE upgrades",
-      done: false,
-      blocking: false,
-    },
-    {
-      id: "custom-domain",
-      label: "Set custom domain (optional)",
-      done: false,
-      blocking: false,
-    },
-    {
-      id: "pooled-db-string",
-      label: "Confirm pooled/private DB connection string in prod",
-      done: false,
-      blocking: false,
-    },
-    {
-      id: "no-env-tracked",
-      label: "Verify no .env is tracked in git",
-      done: false,
-      blocking: false,
-    },
-  ];
+  // Universal hygiene.
+  add("rotate-secrets", "Rotate any secrets that were ever committed to git");
+
+  // Auth: only when the app has (or should have) sign-in.
+  if (input.authNeeded) {
+    add(
+      "register-oauth",
+      "Register OAuth app(s) and paste CLIENT_ID/CLIENT_SECRET",
+    );
+  }
+
+  // Allowlist: only for internal apps.
+  if (mode === "internal") {
+    add(
+      "allowlist",
+      "Confirm ALLOWED_EMAILS/ALLOWED_DOMAIN and lock the allowlist (internal mode)",
+    );
+  }
+
+  // Access-control review: only when preflight actually surfaced findings.
+  if (hasFindings) {
+    add(
+      "review-access-control",
+      hasSqlDb
+        ? "Review the access-control findings (and your Postgres RLS policies)"
+        : "Review the access-control findings",
+    );
+  }
+
+  // Database connectivity — the parts real deploys actually break on.
+  if (hasDb) {
+    add(
+      "db-connection",
+      "Confirm the pooled/private DB connection string is set in prod",
+    );
+    if (hasSqlDb) {
+      add(
+        "db-tls",
+        "Verify the DB client handles managed-Postgres TLS (the sslmode / self-signed-CA footgun, e.g. node-postgres rejecting the CA)",
+      );
+    }
+    if (input.target === "digitalocean") {
+      add(
+        "db-firewall",
+        "Bind the managed DB to the app (a `databases:` section + `${db.DATABASE_URL}`) so DigitalOcean auto-manages trusted-sources — a raw DATABASE_URL secret leaves the firewall manual",
+      );
+    }
+  }
+
+  // Universal closers.
+  add(
+    "dependency-cve",
+    "Run a dependency CVE check (e.g. `npm audit`) and apply upgrades",
+  );
+  add("custom-domain", "Set a custom domain (optional)");
+  add("no-env-tracked", "Verify no .env is tracked in git");
 
   return items;
 }
@@ -184,6 +195,28 @@ export function renderTodoMarkdown(
     out.push("- **View logs:** `doctl apps logs <app-id>` (or the DigitalOcean dashboard -> Apps -> your app -> Runtime Logs).");
     out.push("- **Redeploy:** push to your connected git branch, or run `doctl apps create-deployment <app-id>`.");
     out.push("- **Manage env vars:** edit the app spec / dashboard -> Settings -> App-Level Environment Variables; redeploy to apply.");
+  }
+
+  const databases = input.databases ?? [];
+  if (databases.length > 0) {
+    out.push("");
+    out.push(
+      `- **Database (${databases.join(", ")}) — two prod footguns:**`,
+    );
+    out.push(
+      "  - **TLS:** managed Postgres often presents a self-signed CA, and a modern " +
+        "`pg` client with `sslmode=require` can reject it (\"self-signed certificate " +
+        "in certificate chain\"). Use the provider's CA cert, or set the client's " +
+        "`ssl: { rejectUnauthorized: false }` (equivalently `sslmode=no-verify`).",
+    );
+    if (input.target === "digitalocean") {
+      out.push(
+        "  - **Firewall (trusted sources):** bind the managed DB as an app component " +
+          "(`databases:` section + `${db.DATABASE_URL}`) so DigitalOcean auto-allows " +
+          "the app. A raw `DATABASE_URL` secret leaves the cluster's trusted sources " +
+          "manual — the app can't reach the DB until you add it by hand.",
+      );
+    }
   }
 
   if (input.liveUrl) {

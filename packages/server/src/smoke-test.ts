@@ -19,9 +19,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createServer } from "./mcp/server.js";
 import {
+  CheckCredentialsOutputSchema,
   RouteTargetOutputSchema,
   ValidateComposeOutputSchema,
   WriteTodoOutputSchema,
+  type CheckCredentialsOutput,
   type RouteTargetInput,
   type RouteTargetOutput,
   type ValidateComposeInput,
@@ -67,12 +69,33 @@ async function main(): Promise<void> {
   /* ---- list tools ------------------------------------------------ */
   const tools = await client.listTools();
   const toolNames = tools.tools.map((t) => t.name);
-  for (const expected of ["route_target", "validate_compose", "write_todo"]) {
+  for (const expected of [
+    "check_credentials",
+    "route_target",
+    "validate_compose",
+    "write_todo",
+  ]) {
     assert(
       toolNames.includes(expected),
       `expected tool "${expected}", got ${JSON.stringify(toolNames)}`,
     );
   }
+
+  /* ---- call check_credentials (capability check) ----------------- */
+  const credsRes = await client.callTool({ name: "check_credentials", arguments: {} });
+  assert(!credsRes.isError, `check_credentials errored: ${JSON.stringify(credsRes.content)}`);
+  const creds = CheckCredentialsOutputSchema.parse(
+    credsRes.structuredContent,
+  ) as CheckCredentialsOutput;
+  // Shape (not values — the test env is uncontrolled): four provider booleans,
+  // and configured+missing together cover all four providers.
+  for (const p of [creds.vercel, creds.digitalocean, creds.neon, creds.upstash]) {
+    assert(typeof p === "boolean", "check_credentials must report provider booleans");
+  }
+  assert(
+    creds.configured.length + creds.missing.length === 4,
+    `configured+missing should cover all 4 providers, got ${JSON.stringify(creds)}`,
+  );
 
   /* ---- get the prompt (product mode) ----------------------------- */
   const prompt = await client.getPrompt({
@@ -201,6 +224,32 @@ async function main(): Promise<void> {
   assert(
     vercelOut.target === "vercel" && vercelOut.recommendedProvider === "vercel",
     `stateless next app should route to vercel/vercel, got ${JSON.stringify(vercelOut)}`,
+  );
+
+  /* ---- route_target calibration: Dockerfile + port listener ------ */
+  // A containerized app that binds a port is a slam-dunk container deploy; the
+  // confidence should be high (~0.9), not timid.
+  const dockerRes = await client.callTool({
+    name: "route_target",
+    arguments: {
+      signals: {
+        hasDockerfile: true,
+        composeAppServices: 0,
+        wsServer: false,
+        workers: false,
+        listensOnPort: true,
+        longHandlers: false,
+        persistentFsWrites: false,
+        framework: "express",
+      },
+    } satisfies RouteTargetInput,
+  });
+  const dockerOut = RouteTargetOutputSchema.parse(
+    dockerRes.structuredContent,
+  ) as RouteTargetOutput;
+  assert(
+    dockerOut.target === "container" && dockerOut.confidence >= 0.88,
+    `Dockerfile + port listener should be a high-confidence container route, got ${JSON.stringify(dockerOut)}`,
   );
 
   /* ---- call validate_compose (generate path) --------------------- */
@@ -338,6 +387,42 @@ async function main(): Promise<void> {
       `checklist item malformed: ${JSON.stringify(item)}`,
     );
   }
+
+  /* ---- write_todo tailoring: DigitalOcean + postgres, no auth ----- */
+  const tailoredRes = await client.callTool({
+    name: "write_todo",
+    arguments: {
+      stack: "express",
+      target: "digitalocean",
+      authNeeded: false,
+      mode: "product",
+      databases: ["postgres"],
+    } satisfies WriteTodoInput,
+  });
+  const tailoredOut = WriteTodoOutputSchema.parse(
+    tailoredRes.structuredContent,
+  ) as WriteTodoOutput;
+  const tailoredIds = tailoredOut.shipChecklist.map((i) => i.id);
+  // No auth -> no OAuth item; product mode -> no allowlist item (tailored, not fixed).
+  assert(
+    !tailoredIds.includes("register-oauth"),
+    "a no-auth app should not get the register-oauth checklist item",
+  );
+  assert(
+    !tailoredIds.includes("allowlist"),
+    "product mode should not get the allowlist checklist item",
+  );
+  // postgres + DigitalOcean -> the DB connectivity items (the real footguns).
+  assert(
+    tailoredIds.includes("db-firewall") && tailoredIds.includes("db-tls"),
+    `postgres on DigitalOcean should add the DB firewall + TLS items, got ${JSON.stringify(tailoredIds)}`,
+  );
+  // The Operate section must encode the trusted-sources + TLS gotchas.
+  assert(
+    /trusted sources/i.test(tailoredOut.todoMarkdown) &&
+      /self-signed/i.test(tailoredOut.todoMarkdown),
+    "TODO.md should encode the DB trusted-sources + TLS gotchas",
+  );
 
   /* ---- call write_todo (internal mode, container target) --------- */
   const internalTodoRes = await client.callTool({
