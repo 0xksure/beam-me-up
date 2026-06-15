@@ -1,0 +1,23 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/detect"
+    },
+    {
+      "path": "packages/templates"
+    },
+    {
+      "path": "packages/adapters"
+    },
+    {
+      "path": "packages/tools"
+    },
+    {
+      "path": "packages/server"
+    }
+  ]
+}

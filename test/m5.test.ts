@@ -38,18 +38,18 @@ import crypto from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 
-import { verifyJwt, JwtError } from "../src/auth/oauth/jwt.js";
+import { verifyJwt, JwtError } from "@beam-me-up/server";
 import {
   createJwtVerifier,
   AuthError,
-} from "../src/auth/oauth/verifier.js";
+} from "@beam-me-up/server";
 import {
   buildProtectedResourceMetadata,
   wwwAuthenticate,
-} from "../src/auth/oauth/metadata.js";
-import { resolveOAuthGuard } from "../src/auth/oauth/guard.js";
-import { getOAuthConfig, type OAuthConfig } from "../src/auth/oauth/config.js";
-import { createBeamHttpServer } from "../src/server/http.js";
+} from "@beam-me-up/server";
+import { resolveOAuthGuard } from "@beam-me-up/server";
+import { getOAuthConfig, type OAuthConfig } from "@beam-me-up/server";
+import { createBeamHttpServer } from "@beam-me-up/server";
 
 /* ------------------------------------------------------------------ */
 /* Tiny assertion harness with PASS/FAIL printing                      */

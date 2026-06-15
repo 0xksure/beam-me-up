@@ -7,31 +7,26 @@
   "engines": {
     "node": ">=20"
   },
-  "bin": {
-    "beam-me-up": "dist/server/stdio.js"
-  },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "dev:stdio": "tsx src/server/stdio.ts",
-    "dev:http": "tsx src/server/http.ts",
-    "start:stdio": "node dist/server/stdio.js",
-    "start:http": "node dist/server/http.js",
-    "test": "tsx src/smoke-test.ts",
+    "build": "tsc -b tsconfig.solution.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev:stdio": "tsx packages/server/src/server/stdio.ts",
+    "dev:http": "tsx packages/server/src/server/http.ts",
+    "start:stdio": "node packages/server/dist/server/stdio.js",
+    "start:http": "node packages/server/dist/server/http.js",
+    "test": "tsx packages/server/src/smoke-test.ts",
     "test:m1": "tsx test/m1.test.ts",
     "test:m2": "tsx test/m2.test.ts",
     "test:m3": "tsx test/m3.test.ts",
     "test:m4": "tsx test/m4.test.ts",
     "test:m5": "tsx test/m5.test.ts"
   },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "yaml": "^2.5.0",
-    "zod": "^3.23.0"
-  },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0"
-  }
+  },
+  "workspaces": [
+    "packages/*"
+  ]
 }

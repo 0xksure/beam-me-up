@@ -41,20 +41,20 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createServer } from "../src/mcp/server.js";
-import { detectSecrets, buildEnvPlan } from "../src/detect/secrets.js";
+import { createServer } from "@beam-me-up/server";
+import { detectSecrets, buildEnvPlan } from "@beam-me-up/detect";
 import {
   detectStack,
   detectServices,
   detectBuild,
-} from "../src/detect/stack.js";
-import { detectAccessControl } from "../src/detect/access-control.js";
-import { preflightScan } from "../src/tools/preflight-scan.js";
+} from "@beam-me-up/detect";
+import { detectAccessControl } from "@beam-me-up/detect";
+import { preflightScan } from "@beam-me-up/detect";
 import {
   PreflightScanOutputSchema,
   type PreflightFile,
   type PreflightScanOutput,
-} from "../src/schemas.js";
+} from "@beam-me-up/core";
 
 /* ------------------------------------------------------------------ */
 /* Tiny assertion harness with PASS/FAIL printing                      */

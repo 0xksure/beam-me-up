@@ -43,7 +43,8 @@ of pure, deterministic tools it can call along the way.
 > Configure it with `OAUTH_ISSUER` / `OAUTH_AUDIENCE` + a key (HS256 secret or
 > RS256 public key); unconfigured, it stays no-auth for local dev. See
 > [OAuth on the HTTP transport (M5)](#oauth-on-the-http-transport-m5) below. The
-> remaining milestone is M6 (monorepo split + packaging).
+> remaining milestone, M6 (monorepo split + packaging), is now done too — the
+> codebase is an npm-workspaces monorepo under `packages/*`.
 
 ---
 
@@ -95,17 +96,17 @@ Two transports are provided.
 ### stdio (recommended for Claude Code / Cursor)
 
 ```bash
-npm run dev:stdio        # tsx src/server/stdio.ts
+npm run dev:stdio        # tsx packages/server/src/server/stdio.ts
 # or, after `npm run build`:
-npm run start:stdio      # node dist/server/stdio.js
+npm run start:stdio      # node packages/server/dist/server/stdio.js
 ```
 
 ### Streamable HTTP
 
 ```bash
-npm run dev:http         # tsx src/server/http.ts  (PORT defaults to 3000)
+npm run dev:http         # tsx packages/server/src/server/http.ts  (PORT defaults to 3000)
 # or, after `npm run build`:
-npm run start:http       # node dist/server/http.js
+npm run start:http       # node packages/server/dist/server/http.js
 ```
 
 The HTTP server listens on `http://localhost:3000/mcp`. By default it runs with
@@ -134,7 +135,7 @@ npm run test:m5          # tsx test/m5.test.ts (M5 OAuth HTTP tests, pure crypto
 ### stdio
 
 ```bash
-claude mcp add beam-me-up -- npx tsx /Users/Kristoffer.Berg/github/beam-me-up/src/server/stdio.ts
+claude mcp add beam-me-up -- npx tsx /Users/Kristoffer.Berg/github/beam-me-up/packages/server/src/server/stdio.ts
 ```
 
 ### Streamable HTTP
@@ -466,65 +467,66 @@ npm run test:m5          # tsx test/m5.test.ts — pure crypto + an ephemeral-po
 
 ## Project layout
 
+M6 split the codebase into an **npm-workspaces monorepo** under `packages/*`.
+Each package is a real `@beam-me-up/<name>` package with its own `package.json`
++ `tsconfig.json`; the dependency graph is a clean DAG (no cycles):
+
 ```
-package.json
-tsconfig.json
-.gitignore
-.env.example
-README.md
-src/
-  schemas.ts                 # zod raw shapes + z.objects + inferred types (tool I/O, prompt args, domain types)
-  plan/beam-me-up-plan.ts    # renderBeamMeUpPlan(args) -> orchestration plan (markdown)
-  detect/signals.ts          # deriveSignals(files) -> RepoSignals
-  detect/secrets.ts          # M3: detectSecrets(files) + buildEnvPlan(files, secrets) (masked findings + .env plan)
-  detect/stack.ts            # M3: detectStack / detectServices / detectBuild (frontend/backend/db + build plan)
-  detect/access-control.ts   # M3: detectAccessControl(files, mode) -> AccessControlFinding[]
-  tools/route-target.ts      # routeTarget(input) -> RouteTargetOutput
-  tools/preflight-scan.ts    # M3: preflightScan(input) -> PreflightScanOutput (pure; composes the detectors)
-  tools/validate-compose.ts  # validateCompose(input) -> ValidateComposeOutput
-  templates/compose.ts       # generateCompose(services) -> docker-compose yaml
-  tools/write-todo.ts        # writeTodo(input) -> WriteTodoOutput
-  templates/todo.ts          # renderTodoMarkdown(...) + shipChecklist(...)
-  tools/deploy-tools.ts      # M1: create_deploy_target / set_env_vars / deploy / get_deploy_logs handlers
-  tools/db-tools.ts          # M2: provisionDatabaseTool handler (dispatch by engine, resolve creds)
-  adapters/registry.ts       # selectAdapter(provider, token) -> DeployTarget
-  adapters/deploy/interface.ts        # DeployTarget contract + ProviderToken/DeployStatus/DeployFile/EnvVar
-  adapters/deploy/vercel/client.ts    # VercelClient — typed fetch wrapper (Bearer + teamId), VercelApiError
-  adapters/deploy/vercel/index.ts     # VercelAdapter implements DeployTarget
-  adapters/deploy/vercel/projects.ts  # createProjectImpl + setEnvVarsImpl
-  adapters/deploy/vercel/deploy.ts    # deployImpl (two-phase SHA upload) + getLogsImpl + getUrlImpl
-  adapters/deploy/digitalocean/client.ts    # M4: DigitalOceanClient — typed fetch wrapper (Bearer) + fetchLogText
-  adapters/deploy/digitalocean/app-spec.ts  # M4: pure spec helpers (parseImageRef, mergeEnvs, mapPhase, id codec)
-  adapters/deploy/digitalocean/index.ts     # M4: DigitalOceanAdapter implements DeployTarget (App Platform, image deploys)
-  adapters/db/interface.ts            # DbProvisioner contract + DbEngine/NeonCreds/UpstashCreds/ProvisionResult
-  adapters/db/registry.ts             # selectDbProvisioner(engine, creds) -> DbProvisioner (postgres->Neon, redis->Upstash)
-  adapters/db/neon/client.ts          # NeonClient — typed fetch wrapper (Bearer NEON_API_KEY)
-  adapters/db/neon/index.ts           # NeonProvisioner implements DbProvisioner (project -> pooled DATABASE_URL)
-  adapters/db/upstash/client.ts       # UpstashClient — typed fetch wrapper (Basic email:apiKey)
-  adapters/db/upstash/index.ts        # UpstashProvisioner implements DbProvisioner (redis -> REDIS_URL + REST url/token)
-  auth/token.ts              # getProviderToken(provider) + getDbCredentials(engine) — read provider/DB env vars
-  auth/oauth/config.ts       # M5: getOAuthConfig() — resolve OAUTH_* env (null = disabled)
-  auth/oauth/jwt.ts          # M5: verifyJwt() — pure HS256/RS256 verify (node:crypto), alg-confusion guarded
-  auth/oauth/verifier.ts     # M5: createJwtVerifier() -> TokenVerifier (+ scope enforcement)
-  auth/oauth/metadata.ts     # M5: protected-resource metadata (RFC 9728) + WWW-Authenticate
-  auth/oauth/guard.ts        # M5: resolveOAuthGuard() — authorize(header) seam used by the HTTP server
-  mcp/server.ts              # createServer(): McpServer — registers prompt + 9 tools
-  server/stdio.ts            # stdio entrypoint
-  server/http.ts             # Streamable HTTP entrypoint (createBeamHttpServer; OAuth bearer auth when OAUTH_* set)
-  smoke-test.ts              # M0 in-memory MCP client test
-test/
-  m1.test.ts                 # M1 offline deploy tests (mocked Vercel API)
-  vercel-mock.ts             # installVercelMock() — offline fake for globalThis.fetch
-  m2.test.ts                 # M2 offline DB-provision tests (mocked Neon/Upstash APIs)
-  db-mock.ts                 # installDbMock() — offline fake for globalThis.fetch (Neon + Upstash)
-  m3.test.ts                 # M3 preflight_scan tests (pure; no network, no mock)
-  m4.test.ts                 # M4 offline DigitalOcean deploy tests (mocked DO API)
-  m5.test.ts                 # M5 OAuth HTTP tests (pure crypto + ephemeral-port HTTP, no network)
-  digitalocean-mock.ts       # installDigitalOceanMock() — offline fake for globalThis.fetch (DO App Platform)
+core  ←  detect      ←  adapters  ←  tools  ←  server
+core  ←  templates   ←  tools
 ```
 
-The single-package layout is intentionally structured so it can later split
-into a monorepo (detect / tools / templates / server boundaries).
+```
+package.json               # root: workspaces, scripts (typecheck/build/test)
+tsconfig.base.json         # shared compiler options
+tsconfig.json              # typecheck config (paths @beam-me-up/* -> packages/*/src)
+tsconfig.solution.json     # build solution (`tsc -b`): references every package
+packages/
+  core/        @beam-me-up/core        (deps: zod)
+    src/schemas.ts           # zod raw shapes + z.objects + inferred types; the shared contract
+  detect/      @beam-me-up/detect      (deps: core)         — pure repo analysis
+    src/signals.ts           # deriveSignals(files) -> RepoSignals
+    src/secrets.ts           # M3: detectSecrets + buildEnvPlan (masked findings + .env plan)
+    src/stack.ts             # M3: detectStack / detectServices / detectBuild
+    src/access-control.ts    # M3: detectAccessControl(files, mode)
+    src/route-target.ts      # routeTarget(input) -> RouteTargetOutput
+    src/preflight-scan.ts    # M3: preflightScan(input) (composes the detectors)
+  templates/   @beam-me-up/templates   (deps: core, yaml)
+    src/compose.ts           # generateCompose(services) -> docker-compose yaml
+    src/todo.ts              # renderTodoMarkdown(...) + shipChecklist(...)
+  adapters/    @beam-me-up/adapters    (deps: core, detect) — provider plumbing
+    src/registry.ts          # selectAdapter(provider, token) -> DeployTarget
+    src/token.ts             # getProviderToken + getDbCredentials (provider/DB env vars)
+    src/deploy/interface.ts  # DeployTarget contract
+    src/deploy/vercel/*      # VercelClient + VercelAdapter (M1)
+    src/deploy/digitalocean/* # DigitalOceanClient + app-spec + DigitalOceanAdapter (M4)
+    src/db/{interface,registry}.ts + db/neon/* + db/upstash/*  # DbProvisioner (M2)
+  tools/       @beam-me-up/tools       (deps: core, templates, adapters)
+    src/validate-compose.ts  # validateCompose(input)
+    src/write-todo.ts        # writeTodo(input)
+    src/deploy-tools.ts      # M1/M4: create_deploy_target / set_env_vars / deploy / get_deploy_logs
+    src/db-tools.ts          # M2: provisionDatabaseTool
+    src/plan/beam-me-up-plan.ts # renderBeamMeUpPlan(args) -> orchestration plan (markdown)
+  server/      @beam-me-up/server      (deps: core, detect, tools, @modelcontextprotocol/sdk)
+    src/mcp/server.ts        # createServer(): McpServer — registers the prompt + 9 tools
+    src/server/stdio.ts      # stdio entrypoint (bin)
+    src/server/http.ts       # Streamable HTTP entrypoint (createBeamHttpServer; OAuth when OAUTH_* set)
+    src/auth/oauth/*         # M5: config / jwt / verifier / metadata / guard
+    src/smoke-test.ts        # M0 in-memory MCP client test
+test/                        # top-level suites importing the package barrels (@beam-me-up/*)
+  m1.test.ts + vercel-mock.ts          # M1 (mocked Vercel API)
+  m2.test.ts + db-mock.ts              # M2 (mocked Neon/Upstash)
+  m3.test.ts                           # M3 (pure)
+  m4.test.ts + digitalocean-mock.ts    # M4 (mocked DO API)
+  m5.test.ts                           # M5 (pure crypto + ephemeral-port HTTP)
+```
+
+`route_target` + `preflight_scan` live in **detect** (not tools): they are pure
+repo-analysis, and putting them there breaks the would-be `adapters ↔ tools`
+cycle (an adapter's `detectFit` reuses `routeTarget`). Dev + tests run straight
+off the TypeScript sources via `tsx` (the root `tsconfig` maps `@beam-me-up/*` to
+`packages/*/src`); `npm run build` does a project-references `tsc -b` to per-
+package `dist/`.
 
 ---
 
@@ -551,4 +553,4 @@ into a monorepo (detect / tools / templates / server boundaries).
 | **M3** *(done)* | **Preflight scan** — `preflight_scan` (pure, no network): stack/services detection, hardcoded-secret findings (masked) + a gitignored-`.env` migration plan, access-control heuristics, and a detected build/test/start plan. Feeds `route_target` + `write_todo`. Pure offline test suite (`npm run test:m3`). _(CVE scanning is delegated to the host AI; the OAuth/auth scaffold is deferred to a later milestone.)_ |
 | **M4** *(done)* | **DigitalOcean** deploys — `provider: "digitalocean"` on the same four deploy tools, behind the same `DeployTarget` adapter. App Platform container-image deploys (DOCR / Docker Hub / GHCR); image + env vars live in one app spec; idempotent create (redeploy by name); logs via the deployment's presigned URLs. Token via `DIGITALOCEAN_TOKEN`. Fully-mocked offline test suite (`npm run test:m4`). |
 | **M5** *(done)* | **OAuth on the Streamable HTTP transport** — RFC 9728 protected-resource metadata + bearer-token verification (JWT, HS256/RS256 via `node:crypto`, alg-confusion guarded) with 401/403 + `WWW-Authenticate`, env-gated (`OAUTH_*`); unconfigured = no-auth localhost. Pure + ephemeral-port HTTP test suite (`npm run test:m5`). _(JWKS-URL fetch + a full embedded Authorization Server are possible later add-ons.)_ |
-| **M6** | Monorepo split + hardening: packaging the detect / tools / templates / server / adapters boundaries as separate packages, end-to-end "beam me up" run. |
+| **M6** *(done)* | **Monorepo split** — npm workspaces under `packages/*`: `@beam-me-up/core` (schemas), `detect` (incl. `route_target` + `preflight_scan`), `templates`, `adapters`, `tools`, `server`. Clean acyclic dependency graph, per-package barrels, project-references build (`tsc -b`), tests run off source via `tsx`. _(The live end-to-end "beam me up" run against real providers needs your tokens, so it stays a manual step.)_ |

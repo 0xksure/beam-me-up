@@ -1,22 +1,16 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2022"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "rootDir": "src",
-    "outDir": "dist",
-    "strict": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "declaration": true,
-    "sourceMap": true,
-    "resolveJsonModule": true,
-    "verbatimModuleSyntax": false,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@beam-me-up/*": [
+        "packages/*/src/index.ts"
+      ]
+    }
   },
-  "include": ["src"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "packages/*/src/**/*.ts",
+    "test/**/*.ts"
+  ]
 }

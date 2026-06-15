@@ -7,7 +7,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
-import { deriveSignals } from "../src/detect/signals.ts";
+import { deriveSignals } from "@beam-me-up/detect";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(here, "..");
@@ -31,7 +31,7 @@ function ok(label: string, cond: boolean) {
 
 const transport = new StdioClientTransport({
   command: "node",
-  args: [join(projectRoot, "dist/server/stdio.js")],
+  args: [join(projectRoot, "packages/server/dist/server/stdio.js")],
 });
 const client = new Client({ name: "beam-dryrun", version: "0.0.0" });
 await client.connect(transport);

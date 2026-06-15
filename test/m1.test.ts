@@ -30,8 +30,8 @@ import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createServer } from "../src/mcp/server.js";
-import { VercelAdapter } from "../src/adapters/deploy/vercel/index.js";
+import { createServer } from "@beam-me-up/server";
+import { VercelAdapter } from "@beam-me-up/adapters";
 import {
   CreateDeployTargetOutputSchema,
   SetEnvVarsOutputSchema,
@@ -41,7 +41,7 @@ import {
   type SetEnvVarsOutput,
   type DeployOutput,
   type GetDeployLogsOutput,
-} from "../src/schemas.js";
+} from "@beam-me-up/core";
 import { installVercelMock, type RecordedCall } from "./vercel-mock.js";
 
 /* ------------------------------------------------------------------ */

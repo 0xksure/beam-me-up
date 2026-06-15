@@ -35,13 +35,13 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createServer } from "../src/mcp/server.js";
-import { NeonProvisioner } from "../src/adapters/db/neon/index.js";
-import { UpstashProvisioner } from "../src/adapters/db/upstash/index.js";
+import { createServer } from "@beam-me-up/server";
+import { NeonProvisioner } from "@beam-me-up/adapters";
+import { UpstashProvisioner } from "@beam-me-up/adapters";
 import {
   ProvisionDatabaseOutputSchema,
   type ProvisionDatabaseOutput,
-} from "../src/schemas.js";
+} from "@beam-me-up/core";
 import {
   installDbMock,
   type RecordedCall,

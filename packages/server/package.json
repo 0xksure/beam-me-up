@@ -1,0 +1,21 @@
+{
+  "name": "@beam-me-up/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "beam-me-up": "./dist/server/stdio.js"
+  },
+  "dependencies": {
+    "@beam-me-up/core": "*",
+    "@beam-me-up/detect": "*",
+    "@beam-me-up/tools": "*",
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  }
+}

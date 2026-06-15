@@ -40,14 +40,14 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
-import { createServer } from "../src/mcp/server.js";
-import { DigitalOceanAdapter } from "../src/adapters/deploy/digitalocean/index.js";
+import { createServer } from "@beam-me-up/server";
+import { DigitalOceanAdapter } from "@beam-me-up/adapters";
 import {
   decodeDeploymentId,
   encodeDeploymentId,
   mapPhase,
   parseImageRef,
-} from "../src/adapters/deploy/digitalocean/app-spec.js";
+} from "@beam-me-up/adapters";
 import {
   CreateDeployTargetOutputSchema,
   type CreateDeployTargetOutput,
@@ -57,7 +57,7 @@ import {
   type DeployOutput,
   GetDeployLogsOutputSchema,
   type GetDeployLogsOutput,
-} from "../src/schemas.js";
+} from "@beam-me-up/core";
 import {
   installDigitalOceanMock,
   type RecordedCall,
