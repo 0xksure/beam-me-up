@@ -35,8 +35,15 @@ of pure, deterministic tools it can call along the way.
 > adapter. The host AI builds + pushes the image (DOCR / Docker Hub / GHCR) and
 > `deploy` rolls it out; `create_deploy_target` is idempotent (reuses an existing
 > app by name, so "beam me up" on an already-deployed app just redeploys). See
-> [Deploy to DigitalOcean (M4)](#deploy-to-digitalocean-m4) below. OAuth on the
-> HTTP transport is the next milestone.
+> [Deploy to DigitalOcean (M4)](#deploy-to-digitalocean-m4) below.
+>
+> **Milestone M5 (now live)** — **OAuth on the HTTP transport**: the Streamable
+> HTTP server can now require a verified bearer token on `/mcp` and publishes
+> RFC 9728 protected-resource metadata, so it is safe to run off-localhost.
+> Configure it with `OAUTH_ISSUER` / `OAUTH_AUDIENCE` + a key (HS256 secret or
+> RS256 public key); unconfigured, it stays no-auth for local dev. See
+> [OAuth on the HTTP transport (M5)](#oauth-on-the-http-transport-m5) below. The
+> remaining milestone is M6 (monorepo split + packaging).
 
 ---
 
@@ -93,7 +100,7 @@ npm run dev:stdio        # tsx src/server/stdio.ts
 npm run start:stdio      # node dist/server/stdio.js
 ```
 
-### Streamable HTTP (local dev, no auth)
+### Streamable HTTP
 
 ```bash
 npm run dev:http         # tsx src/server/http.ts  (PORT defaults to 3000)
@@ -101,10 +108,11 @@ npm run dev:http         # tsx src/server/http.ts  (PORT defaults to 3000)
 npm run start:http       # node dist/server/http.js
 ```
 
-The HTTP server listens on `http://localhost:3000/mcp`. **It has no
-authentication yet** — keep it on localhost. OAuth on the HTTP transport is a
-separate upcoming milestone (see roadmap); M1 added real Vercel deploys over the
-existing transports, not HTTP auth.
+The HTTP server listens on `http://localhost:3000/mcp`. By default it runs with
+**no auth** (localhost dev). To make it **safe off-localhost, configure OAuth**
+(M5): set `OAUTH_ISSUER` + `OAUTH_AUDIENCE` + a key and every `/mcp` request must
+carry a verified bearer token. See
+[OAuth on the HTTP transport (M5)](#oauth-on-the-http-transport-m5) below.
 
 ## Other scripts
 
@@ -116,6 +124,7 @@ npm run test:m1          # tsx test/m1.test.ts (M1 deploy tests, mocked Vercel A
 npm run test:m2          # tsx test/m2.test.ts (M2 DB-provision tests, mocked Neon/Upstash APIs)
 npm run test:m3          # tsx test/m3.test.ts (M3 preflight_scan tests, pure / no network)
 npm run test:m4          # tsx test/m4.test.ts (M4 DigitalOcean deploy tests, mocked DO API)
+npm run test:m5          # tsx test/m5.test.ts (M5 OAuth HTTP tests, pure crypto + ephemeral-port HTTP)
 ```
 
 ---
@@ -403,6 +412,58 @@ npm run test:m4          # tsx test/m4.test.ts — fully offline, mocked Digital
 
 ---
 
+## OAuth on the HTTP transport (M5)
+
+The stdio transport is local by construction, but the **Streamable HTTP**
+transport needs protecting once it is reachable off-localhost. M5 makes the
+Beam Me Up server an OAuth 2.0 **Resource Server**: it does not issue tokens, it
+**verifies** tokens an external Authorization Server (AS) issued.
+
+When OAuth is configured, the HTTP server:
+
+- requires `Authorization: Bearer <token>` on every `/mcp` request; a missing or
+  malformed token gets **401**, an invalid/expired token **401**, and a token
+  lacking a required scope **403** — each with a
+  `WWW-Authenticate: Bearer resource_metadata="…"` header;
+- publishes **RFC 9728 protected-resource metadata** at
+  `/.well-known/oauth-protected-resource` (the `resource` + the `authorization_servers`
+  the client should use).
+
+Tokens are verified with **`node:crypto` only** (no new deps): JWT signature
+(**HS256** shared secret or **RS256** public key), with the **alg-confusion guard**
+(the header `alg` must match the configured algorithm — `none` and
+RS256↔HS256 downgrades are rejected) and `exp` / `nbf` / `iss` / `aud` checks.
+
+### Configure it
+
+OAuth is **enabled** as soon as an issuer, an audience, and a key are present;
+with none set, the server stays no-auth for local dev.
+
+```bash
+export OAUTH_ISSUER=https://your-auth-server.example.com   # must equal the token `iss`
+export OAUTH_AUDIENCE=beam-me-up                           # must appear in the token `aud`
+
+# one of:
+export OAUTH_JWT_SECRET=…            # HS256 shared secret, or
+export OAUTH_JWT_PUBLIC_KEY="$(cat as-public-key.pem)"     # RS256 PEM public key
+
+# optional:
+export OAUTH_RESOURCE_URL=https://beam.example.com/mcp     # default http://localhost:$PORT/mcp
+export OAUTH_REQUIRED_SCOPES="deploy"                      # space/comma-separated; default none
+```
+
+> The AS, token issuance, and (optionally) JWKS-URL key rotation live outside
+> this server — M5 is the resource-server half (metadata + verification). A
+> JWKS-URL fetcher and a full embedded AS are possible later add-ons.
+
+### Run the M5 tests
+
+```bash
+npm run test:m5          # tsx test/m5.test.ts — pure crypto + an ephemeral-port HTTP server, no network
+```
+
+---
+
 ## Project layout
 
 ```
@@ -442,9 +503,14 @@ src/
   adapters/db/upstash/client.ts       # UpstashClient — typed fetch wrapper (Basic email:apiKey)
   adapters/db/upstash/index.ts        # UpstashProvisioner implements DbProvisioner (redis -> REDIS_URL + REST url/token)
   auth/token.ts              # getProviderToken(provider) + getDbCredentials(engine) — read provider/DB env vars
+  auth/oauth/config.ts       # M5: getOAuthConfig() — resolve OAUTH_* env (null = disabled)
+  auth/oauth/jwt.ts          # M5: verifyJwt() — pure HS256/RS256 verify (node:crypto), alg-confusion guarded
+  auth/oauth/verifier.ts     # M5: createJwtVerifier() -> TokenVerifier (+ scope enforcement)
+  auth/oauth/metadata.ts     # M5: protected-resource metadata (RFC 9728) + WWW-Authenticate
+  auth/oauth/guard.ts        # M5: resolveOAuthGuard() — authorize(header) seam used by the HTTP server
   mcp/server.ts              # createServer(): McpServer — registers prompt + 9 tools
   server/stdio.ts            # stdio entrypoint
-  server/http.ts             # Streamable HTTP entrypoint (no auth yet; OAuth is a later milestone)
+  server/http.ts             # Streamable HTTP entrypoint (createBeamHttpServer; OAuth bearer auth when OAUTH_* set)
   smoke-test.ts              # M0 in-memory MCP client test
 test/
   m1.test.ts                 # M1 offline deploy tests (mocked Vercel API)
@@ -453,6 +519,7 @@ test/
   db-mock.ts                 # installDbMock() — offline fake for globalThis.fetch (Neon + Upstash)
   m3.test.ts                 # M3 preflight_scan tests (pure; no network, no mock)
   m4.test.ts                 # M4 offline DigitalOcean deploy tests (mocked DO API)
+  m5.test.ts                 # M5 OAuth HTTP tests (pure crypto + ephemeral-port HTTP, no network)
   digitalocean-mock.ts       # installDigitalOceanMock() — offline fake for globalThis.fetch (DO App Platform)
 ```
 
@@ -483,5 +550,5 @@ into a monorepo (detect / tools / templates / server boundaries).
 | **M2** *(done)* | Headless **database provisioning** — `provision_database` behind a pluggable `DbProvisioner` adapter (`postgres` → Neon, `redis` → Upstash). Returns pooled connection-string env vars. Creds via `NEON_API_KEY` / `UPSTASH_EMAIL` + `UPSTASH_API_KEY`. Fully-mocked offline test suite (`npm run test:m2`). |
 | **M3** *(done)* | **Preflight scan** — `preflight_scan` (pure, no network): stack/services detection, hardcoded-secret findings (masked) + a gitignored-`.env` migration plan, access-control heuristics, and a detected build/test/start plan. Feeds `route_target` + `write_todo`. Pure offline test suite (`npm run test:m3`). _(CVE scanning is delegated to the host AI; the OAuth/auth scaffold is deferred to a later milestone.)_ |
 | **M4** *(done)* | **DigitalOcean** deploys — `provider: "digitalocean"` on the same four deploy tools, behind the same `DeployTarget` adapter. App Platform container-image deploys (DOCR / Docker Hub / GHCR); image + env vars live in one app spec; idempotent create (redeploy by name); logs via the deployment's presigned URLs. Token via `DIGITALOCEAN_TOKEN`. Fully-mocked offline test suite (`npm run test:m4`). |
-| **M5** | OAuth on the Streamable HTTP transport (authorization-server metadata + bearer-token verification) so it is safe to run off-localhost. |
+| **M5** *(done)* | **OAuth on the Streamable HTTP transport** — RFC 9728 protected-resource metadata + bearer-token verification (JWT, HS256/RS256 via `node:crypto`, alg-confusion guarded) with 401/403 + `WWW-Authenticate`, env-gated (`OAUTH_*`); unconfigured = no-auth localhost. Pure + ephemeral-port HTTP test suite (`npm run test:m5`). _(JWKS-URL fetch + a full embedded Authorization Server are possible later add-ons.)_ |
 | **M6** | Monorepo split + hardening: packaging the detect / tools / templates / server / adapters boundaries as separate packages, end-to-end "beam me up" run. |
