@@ -20,7 +20,8 @@
     "test": "tsx src/smoke-test.ts",
     "test:m1": "tsx test/m1.test.ts",
     "test:m2": "tsx test/m2.test.ts",
-    "test:m3": "tsx test/m3.test.ts"
+    "test:m3": "tsx test/m3.test.ts",
+    "test:m4": "tsx test/m4.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

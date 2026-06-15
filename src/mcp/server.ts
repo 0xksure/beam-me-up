@@ -201,9 +201,10 @@ export function createServer(): McpServer {
     {
       title: "Create a deploy target",
       description:
-        "Create the Vercel project for this app and return its targetId and " +
-        "dashboard URL. Requires VERCEL_TOKEN in the environment. " +
-        "provider must be \"vercel\" in M1 (DigitalOcean lands in M4).",
+        "Create (or look up) the deploy target for this app and return its " +
+        "targetId and dashboard URL. provider \"vercel\" creates a Vercel " +
+        "project (needs VERCEL_TOKEN); provider \"digitalocean\" creates a " +
+        "DigitalOcean App Platform app (needs DIGITALOCEAN_TOKEN).",
       inputSchema: createDeployTargetInputShape,
       outputSchema: createDeployTargetOutputShape,
     },
@@ -217,8 +218,9 @@ export function createServer(): McpServer {
       title: "Set environment variables",
       description:
         "Upsert environment variables (DB URL, OAuth client id/secret, app " +
-        "secrets, ALLOWED_EMAILS/ALLOWED_DOMAIN) onto a Vercel project. " +
-        "Returns how many were set. Secret values are never echoed back.",
+        "secrets, ALLOWED_EMAILS/ALLOWED_DOMAIN) onto the deploy target (a " +
+        "Vercel project or a DigitalOcean app). Returns how many were set. " +
+        "Secret values are never echoed back.",
       inputSchema: setEnvVarsInputShape,
       outputSchema: setEnvVarsOutputShape,
     },
@@ -229,11 +231,12 @@ export function createServer(): McpServer {
   server.registerTool(
     "deploy",
     {
-      title: "Deploy local files",
+      title: "Deploy",
       description:
-        "Upload the given local files and create a Vercel deployment " +
-        "(two-phase SHA upload). Returns the deploymentId, the live URL, and " +
-        "the initial deploy status.",
+        "Create a deployment. provider \"vercel\": upload the given `files` " +
+        "(two-phase SHA upload). provider \"digitalocean\": deploy the given " +
+        "container `image` to the App Platform app. Returns the deploymentId, " +
+        "the live URL, and the initial deploy status.",
       inputSchema: deployInputShape,
       outputSchema: deployOutputShape,
     },
@@ -246,9 +249,9 @@ export function createServer(): McpServer {
     {
       title: "Read deploy logs",
       description:
-        "Read build (or runtime) logs for a Vercel deployment so you can " +
-        "diagnose a failed build. Returns the current status, the joined log " +
-        "text, and a summary of the last error when the deploy failed.",
+        "Read build (or runtime) logs for a deployment (Vercel or DigitalOcean) " +
+        "so you can diagnose a failed build. Returns the current status, the " +
+        "joined log text, and a summary of the last error when the deploy failed.",
       inputSchema: getDeployLogsInputShape,
       outputSchema: getDeployLogsOutputShape,
     },

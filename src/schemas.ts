@@ -162,11 +162,12 @@ export type BeamMeUpPromptArgs = z.infer<typeof BeamMeUpPromptArgsSchema>;
 /* ------------------------------------------------------------------ */
 
 /**
- * The provider accepted by the M1 deploy tools. We keep this a single-value
- * enum ("vercel") so the schema is honest about what M1 supports; non-vercel
- * providers are rejected at the handler with a friendly "lands in M4" message.
+ * The provider accepted by the deploy tools. M1 shipped Vercel; M4 adds
+ * DigitalOcean (App Platform, container-image deploys). Vercel deploys upload
+ * local `files`; DigitalOcean deploys reference a registry `image` — the deploy
+ * handler validates the right one is present per provider.
  */
-export const DeployProviderSchema = z.enum(["vercel"]);
+export const DeployProviderSchema = z.enum(["vercel", "digitalocean"]);
 export type DeployProvider = z.infer<typeof DeployProviderSchema>;
 
 export const envVarShape = {
@@ -242,7 +243,15 @@ export const deployInputShape = {
   targetId: z.string(),
   projectName: z.string(),
   framework: z.string().optional(),
-  files: z.array(DeployFileSchema),
+  /** Vercel: the local files to upload + deploy. Required for provider "vercel". */
+  files: z.array(DeployFileSchema).optional(),
+  /**
+   * DigitalOcean: a container image reference to deploy, e.g.
+   * "registry.digitalocean.com/myreg/web:1.2.3", "docker.io/acme/web:1.2.3",
+   * "ghcr.io/acme/web:1.2.3", or "acme/web:1.2.3" (Docker Hub). Required for
+   * provider "digitalocean".
+   */
+  image: z.string().optional(),
   target: z.enum(["production", "preview"]).optional(),
 } as const;
 export const DeployInputSchema = z.object(deployInputShape);

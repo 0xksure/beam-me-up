@@ -72,12 +72,18 @@ export interface DeployTarget {
     vars: EnvVar[];
   }): Promise<{ setCount: number; applied: string[] }>;
 
-  /** Upload the local files and create a deployment. */
+  /**
+   * Create a deployment. Vercel uploads the local `files`; DigitalOcean
+   * references a registry `image` (e.g. "registry.digitalocean.com/reg/web:tag").
+   * Each adapter uses the field it needs; the deploy tool validates that the
+   * right one is present for the provider before calling.
+   */
   deploy(input: {
     targetId: string;
     projectName: string;
     framework?: string;
-    files: DeployFile[];
+    files?: DeployFile[];
+    image?: string;
     target?: "production" | "preview";
   }): Promise<{ deploymentId: string; url?: string; status: DeployStatus }>;
 

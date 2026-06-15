@@ -26,8 +26,17 @@ of pure, deterministic tools it can call along the way.
 > hardcoded secrets and emits a gitignored-`.env` migration plan (secret values
 > are masked in the findings), flags access-control gaps, and returns a detected
 > install/build/test/start plan with ordered instructions. See
-> [Preflight scan (M3)](#preflight-scan-m3) below. A DigitalOcean target and
-> OAuth on the HTTP transport are later milestones.
+> [Preflight scan (M3)](#preflight-scan-m3) below.
+>
+> **Milestone M4 (now live)** — **DigitalOcean deploys**: the deploy tools
+> (`create_deploy_target`, `set_env_vars`, `deploy`, `get_deploy_logs`) now also
+> target **DigitalOcean App Platform** via a container image — `provider:
+> "digitalocean"` with `DIGITALOCEAN_TOKEN`, behind the same `DeployTarget`
+> adapter. The host AI builds + pushes the image (DOCR / Docker Hub / GHCR) and
+> `deploy` rolls it out; `create_deploy_target` is idempotent (reuses an existing
+> app by name, so "beam me up" on an already-deployed app just redeploys). See
+> [Deploy to DigitalOcean (M4)](#deploy-to-digitalocean-m4) below. OAuth on the
+> HTTP transport is the next milestone.
 
 ---
 
@@ -106,6 +115,7 @@ npm test                 # tsx src/smoke-test.ts (M0 in-memory client test)
 npm run test:m1          # tsx test/m1.test.ts (M1 deploy tests, mocked Vercel API)
 npm run test:m2          # tsx test/m2.test.ts (M2 DB-provision tests, mocked Neon/Upstash APIs)
 npm run test:m3          # tsx test/m3.test.ts (M3 preflight_scan tests, pure / no network)
+npm run test:m4          # tsx test/m4.test.ts (M4 DigitalOcean deploy tests, mocked DO API)
 ```
 
 ---
@@ -151,8 +161,9 @@ additional tools, all routed through a single pluggable `DeployTarget` adapter
 - **`get_deploy_logs`** — read a deployment's build events
   (`GET /v3/deployments/{id}/events`) so the host AI can diagnose a failed build.
 
-`provider` must be `"vercel"` in M1 — any other value (e.g. `"digitalocean"`)
-returns a friendly *"DigitalOcean lands in M4"* error instead of calling out.
+M1 shipped Vercel deploys; M4 adds **DigitalOcean** behind the same four tools
+(see [Deploy to DigitalOcean (M4)](#deploy-to-digitalocean-m4)). For the Vercel
+flow below, pass `provider: "vercel"`.
 
 ### 1. Get a Vercel token
 
@@ -191,7 +202,8 @@ With the token in place, the host AI (Claude Code / Cursor) follows the
 
 1. Inventory the repo and call **`route_target`** → confirm Vercel fits
    (serverless app, no long-lived process). If it routes to a container host,
-   Vercel is the wrong target — that path lands in M4.
+   use the DigitalOcean flow instead (see
+   [Deploy to DigitalOcean (M4)](#deploy-to-digitalocean-m4)).
 2. Call **`create_deploy_target`** with `{ provider: "vercel", projectName,
    framework? }` → get back a `targetId`.
 3. Call **`set_env_vars`** with `{ provider: "vercel", targetId, vars: [...] }`
@@ -333,6 +345,64 @@ npm run test:m3          # tsx test/m3.test.ts — pure, no network, no mock
 
 ---
 
+## Deploy to DigitalOcean (M4)
+
+M4 makes the **container path real**. When `route_target` sends an app to a
+container host (websockets, workers, multi-service compose, long-running
+handlers, persistent disk, or an always-on listener), deploy it to **DigitalOcean
+App Platform** with the *same four deploy tools* — just pass
+`provider: "digitalocean"`.
+
+DigitalOcean's model differs from Vercel's: an App Platform **app is one spec**
+that holds both the container image and the env vars, and `POST`/`PUT /v2/apps`
+each trigger a deployment. The adapter maps the shared `DeployTarget` flow onto
+that:
+
+- **`create_deploy_target`** `{ provider: "digitalocean", projectName }` —
+  **idempotent**: if an app with that name already exists it is reused (so
+  re-running "beam me up" on an already-deployed app just redeploys); otherwise
+  the app is created with a placeholder image that the first real `deploy`
+  replaces. Returns the app `targetId` + dashboard URL.
+- **`set_env_vars`** — merges the vars into the app spec's service (`secret: true`
+  → DO `SECRET` type, encrypted). Never echoed back.
+- **`deploy`** `{ provider: "digitalocean", targetId, projectName, image }` — the
+  host AI **builds the repo's Dockerfile and pushes the image** to a registry
+  with its own tools, then passes the reference as `image`. Accepted forms:
+  `registry.digitalocean.com/<reg>/<repo>:<tag>` (DOCR),
+  `docker.io/<org>/<repo>:<tag>` or `<org>/<repo>:<tag>` (Docker Hub),
+  `ghcr.io/<org>/<repo>:<tag>` (GHCR). DO pulls + rolls it out (it does **not**
+  accept uploaded files). Returns `{ deploymentId, url, status }`.
+- **`get_deploy_logs`** — reads the deployment phase and fetches the build log
+  from its presigned URL.
+
+### 1. Get a DigitalOcean token
+
+Create a personal access token with App Platform write scope at
+**DigitalOcean → API → Tokens** (<https://cloud.digitalocean.com/account/api/tokens>),
+then export it:
+
+```bash
+export DIGITALOCEAN_TOKEN=dop_v1_xxxxxxxxxxxxxxxx
+```
+
+If it is unset the deploy tools return a clear *"set the DIGITALOCEAN_TOKEN
+environment variable"* error rather than attempting a call.
+
+> **Safety:** the only host the server touches for DigitalOcean is
+> `api.digitalocean.com` (plus the presigned log URLs a deployment hands back),
+> and only when a deploy tool is invoked with a valid token. The M4 test suite
+> (`npm run test:m4`) runs the whole flow against an offline mock of
+> `globalThis.fetch` and **fails loudly if any request escapes** to another host
+> or an unmocked endpoint — so no real app is created during tests.
+
+### Run the M4 tests
+
+```bash
+npm run test:m4          # tsx test/m4.test.ts — fully offline, mocked DigitalOcean API
+```
+
+---
+
 ## Project layout
 
 ```
@@ -362,6 +432,9 @@ src/
   adapters/deploy/vercel/index.ts     # VercelAdapter implements DeployTarget
   adapters/deploy/vercel/projects.ts  # createProjectImpl + setEnvVarsImpl
   adapters/deploy/vercel/deploy.ts    # deployImpl (two-phase SHA upload) + getLogsImpl + getUrlImpl
+  adapters/deploy/digitalocean/client.ts    # M4: DigitalOceanClient — typed fetch wrapper (Bearer) + fetchLogText
+  adapters/deploy/digitalocean/app-spec.ts  # M4: pure spec helpers (parseImageRef, mergeEnvs, mapPhase, id codec)
+  adapters/deploy/digitalocean/index.ts     # M4: DigitalOceanAdapter implements DeployTarget (App Platform, image deploys)
   adapters/db/interface.ts            # DbProvisioner contract + DbEngine/NeonCreds/UpstashCreds/ProvisionResult
   adapters/db/registry.ts             # selectDbProvisioner(engine, creds) -> DbProvisioner (postgres->Neon, redis->Upstash)
   adapters/db/neon/client.ts          # NeonClient — typed fetch wrapper (Bearer NEON_API_KEY)
@@ -379,6 +452,8 @@ test/
   m2.test.ts                 # M2 offline DB-provision tests (mocked Neon/Upstash APIs)
   db-mock.ts                 # installDbMock() — offline fake for globalThis.fetch (Neon + Upstash)
   m3.test.ts                 # M3 preflight_scan tests (pure; no network, no mock)
+  m4.test.ts                 # M4 offline DigitalOcean deploy tests (mocked DO API)
+  digitalocean-mock.ts       # installDigitalOceanMock() — offline fake for globalThis.fetch (DO App Platform)
 ```
 
 The single-package layout is intentionally structured so it can later split
@@ -407,6 +482,6 @@ into a monorepo (detect / tools / templates / server boundaries).
 | **M1** *(done)* | Real **Vercel** deploys — `create_deploy_target`, `set_env_vars`, `deploy`, `get_deploy_logs` behind a pluggable `DeployTarget` adapter. Token via `VERCEL_TOKEN` / `VERCEL_TEAM_ID`. Fully-mocked offline test suite (`npm run test:m1`). |
 | **M2** *(done)* | Headless **database provisioning** — `provision_database` behind a pluggable `DbProvisioner` adapter (`postgres` → Neon, `redis` → Upstash). Returns pooled connection-string env vars. Creds via `NEON_API_KEY` / `UPSTASH_EMAIL` + `UPSTASH_API_KEY`. Fully-mocked offline test suite (`npm run test:m2`). |
 | **M3** *(done)* | **Preflight scan** — `preflight_scan` (pure, no network): stack/services detection, hardcoded-secret findings (masked) + a gitignored-`.env` migration plan, access-control heuristics, and a detected build/test/start plan. Feeds `route_target` + `write_todo`. Pure offline test suite (`npm run test:m3`). _(CVE scanning is delegated to the host AI; the OAuth/auth scaffold is deferred to a later milestone.)_ |
-| **M4** | DigitalOcean deploy adapter behind the same `DeployTarget` interface (container apps for the routes M1 sends to a container host). |
+| **M4** *(done)* | **DigitalOcean** deploys — `provider: "digitalocean"` on the same four deploy tools, behind the same `DeployTarget` adapter. App Platform container-image deploys (DOCR / Docker Hub / GHCR); image + env vars live in one app spec; idempotent create (redeploy by name); logs via the deployment's presigned URLs. Token via `DIGITALOCEAN_TOKEN`. Fully-mocked offline test suite (`npm run test:m4`). |
 | **M5** | OAuth on the Streamable HTTP transport (authorization-server metadata + bearer-token verification) so it is safe to run off-localhost. |
 | **M6** | Monorepo split + hardening: packaging the detect / tools / templates / server / adapters boundaries as separate packages, end-to-end "beam me up" run. |

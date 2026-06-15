@@ -22,10 +22,10 @@
  */
 
 /**
- * Tools that are live and callable today. The M0 decision/generation tools plus
- * the M1 Vercel deploy tools (create_deploy_target / set_env_vars / deploy /
- * get_deploy_logs). The M1 deploy tools are LIVE for the Vercel provider only;
- * DigitalOcean is reserved for M4.
+ * Tools that are live and callable today: the M0 decision/generation tools, the
+ * M3 preflight_scan, and the deploy tools (create_deploy_target / set_env_vars /
+ * deploy / get_deploy_logs). The deploy tools are LIVE for both providers —
+ * vercel (M1) and digitalocean (M4, App Platform container-image deploys).
  */
 const LIVE_TOOLS = [
   "preflight_scan",
@@ -81,18 +81,19 @@ ${modeLine}
 
 ### Live now vs. coming later
 
-Milestone M1 makes the **Vercel deploy path real, end to end**: create the
-project, set env vars, upload local files + deploy, and read build logs are all
-live MCP tools now (Vercel provider only — DigitalOcean lands in M4).
+The **deploy path is real, end to end, for BOTH providers**: create the target,
+set env vars, deploy, and read build logs are all live MCP tools — \`vercel\`
+(M1) and \`digitalocean\` (M4, App Platform container-image deploys).
 
 - **LIVE now** — the \`beam_me_up\` prompt (this plan) and these MCP tools:
   ${LIVE_TOOLS.map((t) => `\`${t}\``).join(", ")}.
   - \`create_deploy_target\`, \`set_env_vars\`, \`deploy\`, and \`get_deploy_logs\`
-    are **live for \`provider: "vercel"\`**. They read the \`VERCEL_TOKEN\`
-    environment variable (and optional \`VERCEL_TEAM_ID\`); if it is unset the
-    tool returns a clear error asking you to set it. Passing any provider other
-    than \`vercel\` returns "DigitalOcean lands in M4 — use provider: vercel for
-    now."
+    are **live for \`provider: "vercel"\` and \`provider: "digitalocean"\`**.
+    Vercel reads \`VERCEL_TOKEN\` (+ optional \`VERCEL_TEAM_ID\`); DigitalOcean
+    reads \`DIGITALOCEAN_TOKEN\`. If the relevant token is unset the tool returns
+    a clear error asking you to set it. The two providers differ at \`deploy\`:
+    Vercel uploads local \`files\`, DigitalOcean deploys a registry \`image\`
+    (see step 10).
 - **COMING SOON** — every step still marked **(coming soon)** below
   (the auth scaffolder). That tool does **not** exist yet. When you reach a
   (coming soon) step: do the
@@ -200,43 +201,48 @@ vars. Call **\`provision_database\`** with \`{ engine, name, region? }\`:
   ([HOST-AI] + user): create the DB in the provider dashboard and capture the
   (pooled/private) connection string for the env step.
 
-### 8. [MCP-TOOL: create_deploy_target] Create the deploy target — **LIVE (Vercel)**
-Creates the Vercel project. Call **\`create_deploy_target\`** with
-\`{ provider: "vercel", projectName, framework? }\` (framework e.g. \`"nextjs"\`).
-- Requires \`VERCEL_TOKEN\` in the environment (optional \`VERCEL_TEAM_ID\` for a
-  team scope). If it is unset the tool returns an error telling you to set it.
+### 8. [MCP-TOOL: create_deploy_target] Create the deploy target — **LIVE (Vercel + DigitalOcean)**
+Use the \`provider\` you confirmed in step 6. Call **\`create_deploy_target\`**
+with \`{ provider, projectName, framework? }\`.
+- \`provider: "vercel"\` creates a Vercel project (needs \`VERCEL_TOKEN\`,
+  optional \`VERCEL_TEAM_ID\`). \`provider: "digitalocean"\` creates (or, if one
+  with that name already exists, reuses) a DigitalOcean App Platform app (needs
+  \`DIGITALOCEAN_TOKEN\`). If the relevant token is unset the tool returns an
+  error telling you to set it.
 - It returns \`{ provider, targetId, dashboardUrl }\`. **Keep \`targetId\`** — you
   pass it to \`set_env_vars\` (step 9) and \`deploy\` (step 10).
-- DigitalOcean is not wired yet: passing \`provider: "digitalocean"\` returns
-  "DigitalOcean lands in M4 — use provider: vercel for now." Container-target
-  apps still need the manual provider flow until M4.
 
-### 9. [MCP-TOOL: set_env_vars] Set environment variables — **LIVE (Vercel)**
+### 9. [MCP-TOOL: set_env_vars] Set environment variables — **LIVE (Vercel + DigitalOcean)**
 Pushes the required env vars (DB URL, OAuth client id/secret, app secrets,
-\`ALLOWED_EMAILS\`/\`ALLOWED_DOMAIN\`) to the Vercel project.
-- [HOST-AI] gather the needed variables from \`.env.example\` and step 1, marking
-  which are secrets. Then call **\`set_env_vars\`** with
-  \`{ provider: "vercel", targetId, vars: [{ key, value, secret?, targets? }] }\`.
-  Secrets are stored as sensitive values; \`targets\` defaults to all environments
-  (production/preview/development). Vars are upserted.
+\`ALLOWED_EMAILS\`/\`ALLOWED_DOMAIN\`) onto the target.
+- [HOST-AI] gather the needed variables from \`.env.example\` and \`preflight_scan\`,
+  marking which are secrets. Then call **\`set_env_vars\`** with
+  \`{ provider, targetId, vars: [{ key, value, secret?, targets? }] }\`. Secrets
+  are stored as sensitive/encrypted values. Vars are upserted (on DigitalOcean
+  they are merged into the app spec).
 - It returns \`{ setCount, applied }\`. **Never print secret values back to the
   chat** — only confirm the \`applied\` key names.
 
-### 10. [MCP-TOOL: deploy] Deploy — **LIVE (Vercel)**
-Uploads your local files and creates a Vercel deployment.
-- [HOST-AI] read the files to ship from disk and pass them as \`files\`
-  (\`{ path, content }\` for text, or \`{ path, contentBase64 }\` for binary). Call
-  **\`deploy\`** with \`{ provider: "vercel", targetId, projectName, framework?,
-  files, target?: "production" | "preview" }\`.
+### 10. [MCP-TOOL: deploy] Deploy — **LIVE (Vercel + DigitalOcean)**
+The deploy *source* depends on the provider:
+- **Vercel** — [HOST-AI] read the files to ship from disk and pass them as
+  \`files\` (\`{ path, content }\` for text, or \`{ path, contentBase64 }\` for
+  binary): \`deploy { provider: "vercel", targetId, projectName, framework?,
+  files, target? }\`.
+- **DigitalOcean** — [HOST-AI] build the container image from the repo's
+  \`Dockerfile\` and push it to a registry (DOCR / Docker Hub / GHCR) with your
+  own tools, then \`deploy { provider: "digitalocean", targetId, projectName,
+  image }\` where \`image\` is the pushed reference, e.g.
+  \`"registry.digitalocean.com/myreg/web:1.2.3"\`. DO App Platform pulls + rolls
+  it out (it does not accept uploaded files).
 - It returns \`{ deploymentId, url?, status }\`. Capture the **live URL** and the
-  \`deploymentId\` (you need it for step 11). The deploy returns the initial
-  status (queued/building); use \`get_deploy_logs\` to follow the build to ready
-  or error.
+  \`deploymentId\` (you need it for step 11). The initial status is
+  queued/building; use \`get_deploy_logs\` to follow the build to ready or error.
 
-### 11. [MCP-TOOL: get_deploy_logs] Read deploy logs — **LIVE (Vercel)**
+### 11. [MCP-TOOL: get_deploy_logs] Read deploy logs — **LIVE (Vercel + DigitalOcean)**
 Reads build logs so you can confirm success or diagnose a failed deploy. Call
-**\`get_deploy_logs\`** with \`{ provider: "vercel", deploymentId, type?: "build"
-| "runtime" }\` (build is the M1 focus; runtime logs are limited).
+**\`get_deploy_logs\`** with \`{ provider, deploymentId, type?: "build"
+| "runtime" }\` (build is the focus; runtime logs are limited).
 - It returns \`{ status, logText, summary? }\`. If \`status\` is \`error\`, read
   \`summary\`/\`logText\`, fix the problem with your own [HOST-AI] tools, and
   redeploy (back to step 10).
@@ -310,9 +316,10 @@ ${
 use your OWN host tools ([HOST-AI]). The analysis/decision/generation tools
 (\`preflight_scan\`, \`route_target\`, \`validate_compose\`, \`write_todo\`) are pure
 and touch nothing.
-The Vercel deploy tools (\`create_deploy_target\`, \`set_env_vars\`, \`deploy\`,
-\`get_deploy_logs\`) DO make real calls to the Vercel API using \`VERCEL_TOKEN\` —
-use them for the live Vercel path. Everything marked **(coming soon)** must be
-done manually until a later milestone lands.
+The deploy tools (\`create_deploy_target\`, \`set_env_vars\`, \`deploy\`,
+\`get_deploy_logs\`) DO make real calls to the provider API — Vercel using
+\`VERCEL_TOKEN\`, or DigitalOcean App Platform using \`DIGITALOCEAN_TOKEN\`.
+Everything marked **(coming soon)** must be done manually until a later
+milestone lands.
 `;
 }

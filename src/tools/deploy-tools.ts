@@ -1,21 +1,23 @@
 /**
- * The four M1 deploy tool handler functions.
+ * The four deploy tool handler functions (Vercel + DigitalOcean).
  *
  * Each tool:
  *   - takes the already-validated args object (parsed against the schema in
  *     server.ts),
  *   - resolves the provider token internally via getProviderToken,
- *   - picks the adapter via selectAdapter,
+ *   - picks the adapter via selectAdapter (vercel -> Vercel, digitalocean ->
+ *     DigitalOcean App Platform),
  *   - delegates to the matching DeployTarget method,
- *   - and NEVER throws uncaught: on a missing token, a non-vercel provider, or a
+ *   - and NEVER throws uncaught: on a missing token, an unknown provider, or a
  *     provider error it returns a structured { error: string } which the MCP
  *     handler in server.ts turns into an isError result.
  *
  * Contract:
- *   - provider !== "vercel"  -> { error: "DigitalOcean lands in M4 — use
- *       provider: vercel for now." }
- *   - getProviderToken(provider) === null -> { error: <tell the user to set
- *       VERCEL_TOKEN> }
+ *   - provider not "vercel"/"digitalocean" -> { error: 'Unknown provider ...' }
+ *   - getProviderToken(provider) === null -> { error: <set VERCEL_TOKEN or
+ *       DIGITALOCEAN_TOKEN> }
+ *   - deploy: provider "vercel" needs `files`; provider "digitalocean" needs an
+ *       `image` reference. The missing one returns a clear { error }.
  *   - any provider/runtime error is caught and returned as { error }.
  *   - secrets / tokens are never logged.
  */
@@ -34,35 +36,35 @@ import type { DeployTarget } from "../adapters/deploy/interface.js";
 import { selectAdapter } from "../adapters/registry.js";
 import { getProviderToken } from "../auth/token.js";
 
-/** Message for any non-vercel provider in M1. */
-const M4_MESSAGE =
-  "DigitalOcean lands in M4 — use provider: vercel for now.";
-
-/** Message when no Vercel credential is configured. */
-const MISSING_TOKEN_MESSAGE =
-  "No Vercel token found. Set the VERCEL_TOKEN environment variable (and optionally VERCEL_TEAM_ID) to deploy to Vercel.";
+/** Friendly "set your token" message per provider. */
+function missingTokenMessage(provider: "vercel" | "digitalocean"): string {
+  return provider === "vercel"
+    ? "No Vercel token found. Set the VERCEL_TOKEN environment variable (and optionally VERCEL_TEAM_ID) to deploy to Vercel."
+    : "No DigitalOcean token found. Set the DIGITALOCEAN_TOKEN environment variable to deploy to DigitalOcean App Platform.";
+}
 
 /**
  * Resolve the adapter for a tool call, or return a { error } envelope.
  *
  * Handles the two pre-flight failure modes the contract calls out:
- *   - a non-vercel provider (M4), and
- *   - a missing token (set VERCEL_TOKEN).
+ *   - an unknown provider, and
+ *   - a missing token (set VERCEL_TOKEN / DIGITALOCEAN_TOKEN).
  *
- * The `provider` field is statically narrowed to "vercel" by the zod enum, but
- * we still compare at runtime so a value that slips past validation (or a
- * future widened schema) is rejected with the friendly M4 message instead of
- * reaching the Vercel REST API.
+ * `provider` is narrowed to "vercel" | "digitalocean" by the zod enum, but we
+ * still compare at runtime so a value that slips past validation is rejected
+ * before it ever reaches a provider REST API.
  */
 function resolveAdapter(provider: string): DeployTarget | ToolError {
-  if (provider !== "vercel") {
-    return { error: M4_MESSAGE };
+  if (provider !== "vercel" && provider !== "digitalocean") {
+    return {
+      error: `Unknown provider "${provider}". Use "vercel" or "digitalocean".`,
+    };
   }
-  const token = getProviderToken("vercel");
+  const token = getProviderToken(provider);
   if (token === null) {
-    return { error: MISSING_TOKEN_MESSAGE };
+    return { error: missingTokenMessage(provider) };
   }
-  return selectAdapter("vercel", token);
+  return selectAdapter(provider, token);
 }
 
 /** Narrow the resolveAdapter result. */
@@ -113,12 +115,29 @@ export async function deployTool(
 ): Promise<DeployOutput | ToolError> {
   const adapter = resolveAdapter(args.provider);
   if (isToolError(adapter)) return adapter;
+
+  // Provider-specific deploy source: Vercel uploads local files, DigitalOcean
+  // references a registry image. Validate the right one is present.
+  if (args.provider === "vercel" && (!args.files || args.files.length === 0)) {
+    return {
+      error:
+        "Vercel deploys need files: pass the local files to upload as `files: [{ path, content }]`.",
+    };
+  }
+  if (args.provider === "digitalocean" && (!args.image || args.image.trim() === "")) {
+    return {
+      error:
+        'DigitalOcean deploys need a container image: pass `image` (e.g. "registry.digitalocean.com/myreg/web:1.2.3").',
+    };
+  }
+
   try {
     const result = await adapter.deploy({
       targetId: args.targetId,
       projectName: args.projectName,
       framework: args.framework,
       files: args.files,
+      image: args.image,
       target: args.target,
     });
     return {
