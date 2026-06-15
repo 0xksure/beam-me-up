@@ -301,8 +301,13 @@ export class DigitalOceanAdapter implements DeployTarget {
   /**
    * Read build (default) or runtime logs for a deployment. The composite
    * deploymentId decodes to { appId, deploymentId }; we read the deployment for
-   * status + progress, then fetch the (presigned) historic log file for real
-   * text, falling back to a note about the live stream when none exists yet.
+   * status + progress, then best-effort fetch a log file's text.
+   *
+   * IMPORTANT: an IMAGE-based deploy has NO build phase, so DO answers a BUILD
+   * logs request with an error ("...log task status skipped"). We therefore try
+   * the requested type and then fall back across the other phases, and we NEVER
+   * let a logs-fetch failure mask the deployment status — the status (from the
+   * deployment record) is the primary signal callers poll on.
    */
   async getLogs(input: {
     deploymentId: string;
@@ -315,22 +320,33 @@ export class DigitalOceanAdapter implements DeployTarget {
     }>("GET", `/v2/apps/${appId}/deployments/${deploymentId}`);
 
     const status = mapPhase(deployment.phase);
-    const logType = input.type === "runtime" ? "RUN" : "BUILD";
 
-    const logs = await this.#client.request<DoLogsResponse>(
-      "GET",
-      `/v2/apps/${appId}/deployments/${deploymentId}/logs`,
-      { query: { type: logType } },
-    );
+    // Try the requested phase first, then fall back. For a "build" request on an
+    // image deploy BUILD is skipped, so DEPLOY is where the useful text lives.
+    const order =
+      input.type === "runtime" ? ["RUN", "DEPLOY"] : ["BUILD", "DEPLOY", "RUN"];
 
-    const historic = logs.historic_urls?.[0];
-    let logText: string;
-    if (historic) {
-      logText = await this.#client.fetchLogText(historic);
-    } else if (logs.live_url) {
-      logText = `No historic log file yet; live logs stream at ${logs.live_url}`;
-    } else {
-      logText = "";
+    let logText = "";
+    for (const logType of order) {
+      try {
+        const logs = await this.#client.request<DoLogsResponse>(
+          "GET",
+          `/v2/apps/${appId}/deployments/${deploymentId}/logs`,
+          { query: { type: logType } },
+        );
+        const historic = logs.historic_urls?.[0];
+        if (historic) {
+          logText = await this.#client.fetchLogText(historic);
+          break;
+        }
+        if (logs.live_url) {
+          logText = `No historic log file yet; live ${logType} logs stream at ${logs.live_url}`;
+          break;
+        }
+      } catch {
+        // This phase has no logs (e.g. BUILD skipped for an image deploy); try
+        // the next one. The status is still returned regardless.
+      }
     }
 
     return {

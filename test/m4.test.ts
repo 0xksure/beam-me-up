@@ -22,8 +22,9 @@
  *     - deploy GETs then PUTs the app with services[0].image replaced (parsed
  *       from the ref); returns deploymentId "app_do_123:dep_do_2", an https url,
  *       and a mapped status.
- *     - getLogs GETs the deployment + the logs endpoint, fetches the historic
- *       URL, and returns logText including "Build completed"; status "ready".
+ *     - getLogs GETs the deployment for status, then (since an image deploy has
+ *       no build phase: type=BUILD 400s) falls back to DEPLOY logs; returns
+ *       status "ready" + the deploy-log text. A logs failure never masks status.
  *
  *   Tool level (in-memory MCP client, DIGITALOCEAN_TOKEN set, fetch mocked):
  *     - create_deploy_target / set_env_vars / deploy / get_deploy_logs for
@@ -391,7 +392,9 @@ async function testAdapter(): Promise<void> {
       );
     }
 
-    /* ---- getLogs: deployment status + historic log text --------- */
+    /* ---- getLogs: status + the BUILD->DEPLOY fallback ------------ */
+    // An image deploy has no build phase: type=BUILD 400s ("skipped"), so the
+    // adapter must fall back to DEPLOY logs and STILL return the status.
     const logs = await adapter.getLogs({
       deploymentId: `${APP_ID}:${DEPLOYMENT_ID}`,
     });
@@ -400,8 +403,8 @@ async function testAdapter(): Promise<void> {
       `getLogs -> status "ready" (deployment phase ACTIVE) (got "${logs.status}")`,
     );
     check(
-      logs.logText.includes("Build completed"),
-      `getLogs -> logText includes "Build completed" (got "${logs.logText}")`,
+      logs.logText.includes("App is live"),
+      `getLogs -> falls back BUILD->DEPLOY; logText has the deploy log (got "${logs.logText}")`,
     );
 
     /* ---- no real-network escape --------------------------------- */
@@ -565,8 +568,8 @@ async function testTools(): Promise<void> {
       gRes.structuredContent,
     ) as GetDeployLogsOutput;
     check(
-      gOut.logText.includes("Build completed"),
-      `get_deploy_logs -> logText includes "Build completed" (got "${gOut.logText}")`,
+      gOut.logText.includes("App is live"),
+      `get_deploy_logs -> logText has the deploy log via fallback (got "${gOut.logText}")`,
     );
 
     /* ---- happy-path stayed entirely on the mock ----------------- */

@@ -15,9 +15,11 @@
  *   GET  /v2/apps/app_do_123              -> { app: APP_WITH_SPEC }
  *   PUT  /v2/apps/app_do_123              -> { app: APP_UPDATED }
  *   GET  /v2/apps/app_do_123/deployments/dep_do_2        -> { deployment: DEPLOYMENT_ACTIVE }
- *   GET  /v2/apps/app_do_123/deployments/dep_do_2/logs   -> { historic_urls:
- *         ["https://api.digitalocean.com/_mock/build.log"], live_url: "wss://logs/build" }
- *   GET  /_mock/build.log                 -> text/plain "Pulling image\nBuild completed\n"
+ *   GET  .../deployments/dep_do_2/logs?type=BUILD  -> 400 "...log task status
+ *         skipped" (image deploys have no build phase — the adapter falls back)
+ *   GET  .../deployments/dep_do_2/logs?type=DEPLOY -> { historic_urls:
+ *         ["https://api.digitalocean.com/_mock/deploy.log"], live_url: "wss://logs/deploy" }
+ *   GET  /_mock/deploy.log                -> text/plain "Deploying image\nApp is live\n"
  *
  * where (exported so the test can assert against them):
  *   APP_CREATED   = { id: "app_do_123",
@@ -39,7 +41,7 @@
  *   DEPLOYMENT_ACTIVE = { id: "dep_do_2", phase: "ACTIVE",
  *                     progress: { total_steps: 5, success_steps: 5, error_steps: 0,
  *                                 pending_steps: 0, running_steps: 0, steps: [] } }
- *   BUILD_LOG_TEXT = "Pulling image\nBuild completed\n"
+ *   DEPLOY_LOG_TEXT = "Deploying image\nApp is live\n"
  *
  * Host guard: allow ONLY api.digitalocean.com. Any other host -> blocked
  * { reason: "non-do-host" } + a 599 (NEVER the real network). A recognised host
@@ -71,7 +73,7 @@ export type DigitalOceanMock = {
 export const APP_ID = "app_do_123";
 export const DEPLOYMENT_ID = "dep_do_2";
 export const LIVE_URL = "https://web-app-abc.ondigitalocean.app";
-export const BUILD_LOG_TEXT = "Pulling image\nBuild completed\n";
+export const DEPLOY_LOG_TEXT = "Deploying image\nApp is live\n";
 
 /** Build a JSON Response with the given status. */
 function jsonResponse(value: unknown, status = 200): Response {
@@ -244,17 +246,33 @@ function cannedResponse(
     };
   }
 
-  // GET /v2/apps/app_do_123/deployments/dep_do_2/logs  -> log url envelope
-  // (checked before the bare deployment route so the longer path wins)
+  // GET .../deployments/dep_do_2/logs?type=...  -> per-phase log url envelope.
+  // (checked before the bare deployment route so the longer path wins.) Mirrors
+  // the REAL API: an IMAGE deploy has NO build phase, so type=BUILD is answered
+  // with an error ("...log task status skipped"); the useful text lives in the
+  // DEPLOY (and RUN) phase. The adapter must therefore fall back BUILD -> DEPLOY.
   if (
     method === "GET" &&
     path === `/v2/apps/${APP_ID}/deployments/${DEPLOYMENT_ID}/logs`
   ) {
+    if (u.searchParams.get("type") === "BUILD") {
+      return {
+        matched: true,
+        response: jsonResponse(
+          {
+            id: "bad_request",
+            message:
+              "cannot get build logs for deployments with all components log task status skipped",
+          },
+          400,
+        ),
+      };
+    }
     return {
       matched: true,
       response: jsonResponse({
-        historic_urls: ["https://api.digitalocean.com/_mock/build.log"],
-        live_url: "wss://logs/build",
+        historic_urls: ["https://api.digitalocean.com/_mock/deploy.log"],
+        live_url: "wss://logs/deploy",
       }),
     };
   }
@@ -283,9 +301,9 @@ function cannedResponse(
     };
   }
 
-  // GET /_mock/build.log  -> presigned build-log text (text/plain, not JSON)
-  if (method === "GET" && path === "/_mock/build.log") {
-    return { matched: true, response: textResponse(BUILD_LOG_TEXT) };
+  // GET /_mock/deploy.log  -> presigned deploy-log text (text/plain, not JSON)
+  if (method === "GET" && path === "/_mock/deploy.log") {
+    return { matched: true, response: textResponse(DEPLOY_LOG_TEXT) };
   }
 
   return {
