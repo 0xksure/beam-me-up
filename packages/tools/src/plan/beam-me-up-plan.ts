@@ -31,6 +31,7 @@ const LIVE_TOOLS = [
   "check_credentials",
   "build_image_plan",
   "preflight_scan",
+  "review_code",
   "route_target",
   "validate_compose",
   "write_todo",
@@ -168,6 +169,13 @@ the user and get a yes before applying:
   any already-committed secret must be rotated (track it in \`securityFollowups\`).
 - Address (or defer to the ship checklist) the high-severity \`accessControl\`
   findings. Run the \`build.instructions\` to confirm the app still builds + runs.
+- **Deeper code review:** for a fuller security pass beyond \`preflight_scan\`'s
+  posture checks, call **\`review_code\`** with \`{ files }\`. It returns
+  prioritised \`findings\` (XSS, SQL/command injection, error info-disclosure,
+  disabled TLS verification, missing auth/headers/rate-limit, eval, weak crypto,
+  open redirect) each with a concrete \`recommendation\`. [HOST-AI] apply the
+  recommendations with your own file tools and **[CONFIRM]** anything risky (auth
+  changes, dependency additions) with the user before applying.
 
 ### 4. [MCP-TOOL: validate_compose] Validate or generate docker-compose
 Decide whether this project needs container orchestration (multiple services,

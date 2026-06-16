@@ -126,6 +126,7 @@ npm run test:m2          # tsx test/m2.test.ts (M2 DB-provision tests, mocked Ne
 npm run test:m3          # tsx test/m3.test.ts (M3 preflight_scan tests, pure / no network)
 npm run test:m4          # tsx test/m4.test.ts (M4 DigitalOcean deploy tests, mocked DO API)
 npm run test:m5          # tsx test/m5.test.ts (M5 OAuth HTTP tests, pure crypto + ephemeral-port HTTP)
+npm run test:m7          # tsx test/m7.test.ts (review_code vulnerability-review tests, pure)
 ```
 
 ---
@@ -491,6 +492,7 @@ packages/
     src/access-control.ts    # M3: detectAccessControl(files, mode)
     src/route-target.ts      # routeTarget(input) -> RouteTargetOutput
     src/preflight-scan.ts    # M3: preflightScan(input) (composes the detectors)
+    src/review.ts            # reviewCode(input) -> heuristic vulnerability findings + fixes
   templates/   @beam-me-up/templates   (deps: core, yaml)
     src/compose.ts           # generateCompose(services) -> docker-compose yaml
     src/todo.ts              # renderTodoMarkdown(...) + shipChecklist(...)
@@ -510,7 +512,7 @@ packages/
     src/db-tools.ts          # M2: provisionDatabaseTool
     src/plan/beam-me-up-plan.ts # renderBeamMeUpPlan(args) -> orchestration plan (markdown)
   server/      @beam-me-up/server      (deps: core, detect, tools, @modelcontextprotocol/sdk)
-    src/mcp/server.ts        # createServer(): McpServer — registers the prompt + 11 tools
+    src/mcp/server.ts        # createServer(): McpServer — registers the prompt + 12 tools
     src/server/stdio.ts      # stdio entrypoint (bin)
     src/server/http.ts       # Streamable HTTP entrypoint (createBeamHttpServer; OAuth when OAUTH_* set)
     src/auth/oauth/*         # M5: config / jwt / verifier / metadata / guard

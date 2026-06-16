@@ -25,6 +25,8 @@ import {
   writeTodoOutputShape,
   preflightScanInputShape,
   preflightScanOutputShape,
+  reviewCodeInputShape,
+  reviewCodeOutputShape,
   createDeployTargetInputShape,
   createDeployTargetOutputShape,
   setEnvVarsInputShape,
@@ -43,6 +45,7 @@ import { routeTarget } from "@beam-me-up/detect";
 import { validateCompose } from "@beam-me-up/tools";
 import { writeTodo } from "@beam-me-up/tools";
 import { preflightScan } from "@beam-me-up/detect";
+import { reviewCode } from "@beam-me-up/detect";
 import {
   createDeployTarget,
   setEnvVarsTool,
@@ -239,6 +242,30 @@ export function createServer(): McpServer {
     },
     (args) => {
       const result = preflightScan(args);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    },
+  );
+
+  /* ---- tool: review_code (vulnerability review) ----------------- */
+  server.registerTool(
+    "review_code",
+    {
+      title: "Review code for vulnerabilities",
+      description:
+        "Pure heuristic security review: the host AI passes the files it read; " +
+        "returns prioritised findings (XSS, SQL/command injection, error " +
+        "info-disclosure, disabled TLS verification, missing auth/headers/" +
+        "rate-limit, eval, weak crypto, open redirect), each with a concrete " +
+        "recommendation, plus severity counts. It does NOT edit files — apply " +
+        "the recommendations yourself (confirm risky changes with the user).",
+      inputSchema: reviewCodeInputShape,
+      outputSchema: reviewCodeOutputShape,
+    },
+    (args) => {
+      const result = reviewCode(args);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         structuredContent: result,

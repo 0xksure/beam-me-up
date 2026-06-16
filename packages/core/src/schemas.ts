@@ -595,3 +595,53 @@ export const preflightScanOutputShape = {
 } as const;
 export const PreflightScanOutputSchema = z.object(preflightScanOutputShape);
 export type PreflightScanOutput = z.infer<typeof PreflightScanOutputSchema>;
+
+/* ------------------------------------------------------------------ */
+/* review_code (vulnerability review)                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * review_code is a PURE, heuristic code-vulnerability review (no network/FS):
+ * the host AI passes the files it read; the tool returns prioritised findings
+ * across categories like XSS, SQL/command injection, error info-disclosure,
+ * disabled TLS verification, missing auth on mutating routes, missing security
+ * headers / rate-limiting, eval, weak crypto, and open redirects — each with a
+ * concrete `recommendation`. It does NOT edit files (the server is pure); the
+ * host AI applies the recommendations with its own file tools (confirm risky
+ * changes with the user first).
+ */
+export const reviewFindingShape = {
+  /** Stable detector id, e.g. "xss-innerhtml", "sql-injection", "tls-disabled". */
+  id: z.string(),
+  severity: z.enum(["critical", "high", "medium", "low"]),
+  /** "xss" | "injection" | "info-disclosure" | "tls" | "auth" | "headers" |
+   *  "rate-limit" | "crypto" | "open-redirect" | "secrets" | ... */
+  category: z.string(),
+  file: z.string(),
+  line: z.number().int().nonnegative(),
+  title: z.string(),
+  detail: z.string(),
+  /** Concrete fix the host AI should apply. */
+  recommendation: z.string(),
+} as const;
+export const ReviewFindingSchema = z.object(reviewFindingShape);
+export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+
+export const reviewCodeInputShape = {
+  files: z.array(PreflightFileSchema),
+} as const;
+export const ReviewCodeInputSchema = z.object(reviewCodeInputShape);
+export type ReviewCodeInput = z.infer<typeof ReviewCodeInputSchema>;
+
+export const reviewCodeOutputShape = {
+  findings: z.array(ReviewFindingSchema),
+  counts: z.object({
+    critical: z.number().int().nonnegative(),
+    high: z.number().int().nonnegative(),
+    medium: z.number().int().nonnegative(),
+    low: z.number().int().nonnegative(),
+  }),
+  summary: z.string(),
+} as const;
+export const ReviewCodeOutputSchema = z.object(reviewCodeOutputShape);
+export type ReviewCodeOutput = z.infer<typeof ReviewCodeOutputSchema>;
