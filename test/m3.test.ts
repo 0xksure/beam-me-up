@@ -191,15 +191,33 @@ function testSecretsAndEnvPlan(): void {
     );
   }
 
-  /* ---- buildEnvPlan: gitignore + real .env + blank .env.example --- */
+  /* ---- buildEnvPlan: gitignore handling (no false positives) ------ */
   const plan = buildEnvPlan(FIXTURE, secrets);
+  // The fixture has NO .gitignore, so .env hygiene is UNVERIFIABLE — we must NOT
+  // emit a (likely false) "add .env to .gitignore" recommendation.
   check(
-    plan.gitignoreAdditions.includes(".env"),
-    `buildEnvPlan.gitignoreAdditions includes ".env" (got ${JSON.stringify(plan.gitignoreAdditions)})`,
+    plan.gitignoreAdditions.length === 0,
+    `no .gitignore provided -> no gitignore recommendation (got ${JSON.stringify(plan.gitignoreAdditions)})`,
+  );
+  // A .gitignore that does NOT cover .env -> recommend adding it.
+  const planMissing = buildEnvPlan(
+    [...FIXTURE, { path: ".gitignore", content: "node_modules/\n" }],
+    secrets,
   );
   check(
-    plan.envAlreadyGitignored === false,
-    "buildEnvPlan.envAlreadyGitignored is false (no .gitignore present)",
+    planMissing.gitignoreAdditions.includes(".env") &&
+      planMissing.envAlreadyGitignored === false,
+    `a .gitignore lacking .env -> recommend adding .env (got ${JSON.stringify(planMissing.gitignoreAdditions)})`,
+  );
+  // A .gitignore that already covers .env -> nothing to add.
+  const planCovered = buildEnvPlan(
+    [...FIXTURE, { path: ".gitignore", content: ".env\n" }],
+    secrets,
+  );
+  check(
+    planCovered.gitignoreAdditions.length === 0 &&
+      planCovered.envAlreadyGitignored === true,
+    "a .gitignore covering .env -> envAlreadyGitignored true, nothing to add",
   );
 
   // The .env (migration target) keeps the REAL value so the app keeps working.
@@ -365,6 +383,13 @@ function testEmptyInput(): void {
     check(
       typeof out.summary === "string" && out.summary.length > 0,
       "empty input -> summary is a non-empty string",
+    );
+    // Input-completeness feedback: with no files, it flags the missing
+    // .gitignore (unverified hygiene) + the missing manifest.
+    check(
+      out.notProvided.some((n) => /gitignore/i.test(n)) &&
+        out.notProvided.some((n) => /manifest/i.test(n)),
+      `empty input -> notProvided flags .gitignore + manifest (got ${JSON.stringify(out.notProvided)})`,
     );
   }
 }

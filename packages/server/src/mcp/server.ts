@@ -13,6 +13,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import {
   beamMeUpPromptArgsShape,
+  buildImagePlanInputShape,
+  buildImagePlanOutputShape,
   checkCredentialsInputShape,
   checkCredentialsOutputShape,
   routeTargetInputShape,
@@ -36,6 +38,7 @@ import {
 } from "@beam-me-up/core";
 import { renderBeamMeUpPlan } from "@beam-me-up/tools";
 import { checkCredentials } from "@beam-me-up/tools";
+import { buildImagePlan } from "@beam-me-up/tools";
 import { routeTarget } from "@beam-me-up/detect";
 import { validateCompose } from "@beam-me-up/tools";
 import { writeTodo } from "@beam-me-up/tools";
@@ -124,6 +127,29 @@ export function createServer(): McpServer {
     },
     () => {
       const result = checkCredentials();
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    },
+  );
+
+  /* ---- tool: build_image_plan ----------------------------------- */
+  server.registerTool(
+    "build_image_plan",
+    {
+      title: "Build/push image recipe",
+      description:
+        "Pure: emit the exact ordered commands to build + push a container " +
+        "image (login, `docker buildx build --platform linux/amd64 … --push`), " +
+        "the prerequisites to check (docker daemon, buildx, registry auth), and " +
+        "the footgun warnings — chiefly that App Platform needs linux/amd64. " +
+        "Call this before the host-owned build step; it does not run anything.",
+      inputSchema: buildImagePlanInputShape,
+      outputSchema: buildImagePlanOutputShape,
+    },
+    (args) => {
+      const result = buildImagePlan(args);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         structuredContent: result,

@@ -19,6 +19,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createServer } from "./mcp/server.js";
 import {
+  BuildImagePlanOutputSchema,
   CheckCredentialsOutputSchema,
   RouteTargetOutputSchema,
   ValidateComposeOutputSchema,
@@ -71,6 +72,7 @@ async function main(): Promise<void> {
   const toolNames = tools.tools.map((t) => t.name);
   for (const expected of [
     "check_credentials",
+    "build_image_plan",
     "route_target",
     "validate_compose",
     "write_todo",
@@ -95,6 +97,26 @@ async function main(): Promise<void> {
   assert(
     creds.configured.length + creds.missing.length === 4,
     `configured+missing should cover all 4 providers, got ${JSON.stringify(creds)}`,
+  );
+
+  /* ---- call build_image_plan (build/push guardrail) -------------- */
+  const bipRes = await client.callTool({
+    name: "build_image_plan",
+    arguments: { repository: "web", registry: "myreg" },
+  });
+  assert(!bipRes.isError, `build_image_plan errored: ${JSON.stringify(bipRes.content)}`);
+  const bip = BuildImagePlanOutputSchema.parse(bipRes.structuredContent);
+  assert(
+    bip.imageRef === "registry.digitalocean.com/myreg/web:v1",
+    `build_image_plan -> DOCR image ref, got ${bip.imageRef}`,
+  );
+  assert(
+    bip.commands.some((c) => /buildx build --platform linux\/amd64 .* --push/.test(c)),
+    `build_image_plan should emit the amd64 buildx --push command, got ${JSON.stringify(bip.commands)}`,
+  );
+  assert(
+    bip.warnings.some((w) => /linux\/amd64/i.test(w)),
+    "build_image_plan should warn about the linux/amd64 footgun",
   );
 
   /* ---- get the prompt (product mode) ----------------------------- */

@@ -487,8 +487,16 @@ export function buildEnvPlan(
     note: `Replace the hardcoded ${s.kind} with process.env.${s.suggestedEnvKey} and load it from .env.`,
   }));
 
+  // Only recommend gitignoring .env when we can actually SEE a .gitignore that
+  // fails to cover it. If no .gitignore was provided we cannot verify, so we do
+  // NOT emit a (likely false) "add .env to .gitignore" recommendation —
+  // preflight_scan surfaces the missing file via `notProvided` instead.
+  const gitignorePresent = files.some(
+    (f) => baseName(f?.path ?? "").toLowerCase() === ".gitignore",
+  );
   const envAlreadyGitignored = gitignoreCoversEnv(files);
-  const gitignoreAdditions = envAlreadyGitignored ? [] : [".env"];
+  const gitignoreAdditions =
+    gitignorePresent && !envAlreadyGitignored ? [".env"] : [];
 
   return {
     envFileContent,

@@ -29,6 +29,7 @@
  */
 const LIVE_TOOLS = [
   "check_credentials",
+  "build_image_plan",
   "preflight_scan",
   "route_target",
   "validate_compose",
@@ -149,6 +150,13 @@ the repo:
   \`instructions\` to verify the app builds and runs **before** deploying.
 - \`securityFollowups\` + \`instructions\` + \`summary\` — feed \`securityFollowups\`
   straight into \`write_todo\` (step 12).
+- \`notProvided\` — relevant files the scan did NOT receive (e.g. \`.gitignore\`),
+  each with the finding it leaves unverified. The scan's quality depends on the
+  files you pass, so for a faithful result include the \`.gitignore\`, the
+  manifest (\`package.json\` / \`pyproject.toml\` / …) and lockfile — then **pass
+  the missing files and re-run** to clear the gap.
+- \`mode\` (\`"${mode}"\` here): \`internal\` additionally flags a missing
+  \`ALLOWED_EMAILS\`/\`ALLOWED_DOMAIN\` allowlist; \`product\` does not.
 
 ### 3. [CONFIRM] Apply the secret → .env migration + fixes
 Using \`preflight_scan\`'s \`envPlan\` and findings, propose the concrete edits to
@@ -255,10 +263,11 @@ The deploy *source* depends on the provider:
     \`Endpoint\` is \`registry.digitalocean.com/<name>\`, so the image ref is
     \`registry.digitalocean.com/<name>/<repo>:<tag>\`. Pin a real \`<tag>\` (a
     version or git SHA), **not \`latest\`**, so redeploys are reproducible.
-  - **Auth, then build for the RIGHT architecture + push:** App Platform runs
-    **linux/amd64**, so on Apple Silicon you MUST cross-build:
-    \`doctl registry login\` then
-    \`docker buildx build --platform linux/amd64 -t <ref> --push .\`
+  - **Get the exact recipe from the tool:** call **\`build_image_plan\`** with
+    \`{ repository, registry?, tag? }\` — it returns the ordered \`commands\`
+    (\`doctl registry login\`, \`docker buildx build --platform linux/amd64 …
+    --push\`), the \`prerequisites\` to check (docker daemon, buildx, registry
+    auth), and \`warnings\` (the linux/amd64 footgun). Run those commands.
   - Then \`deploy { provider: "digitalocean", targetId, projectName, image: "<ref>" }\`.
     DO pulls + rolls it out (it does not accept uploaded files); \`image\` may be a
     DOCR / Docker Hub / GHCR ref.

@@ -503,13 +503,14 @@ packages/
     src/db/{interface,registry}.ts + db/neon/* + db/upstash/*  # DbProvisioner (M2)
   tools/       @beam-me-up/tools       (deps: core, templates, adapters)
     src/check-credentials.ts # checkCredentials() -> which provider creds are present (no values)
+    src/build-image-plan.ts  # buildImagePlan() -> exact docker build/push recipe + prereqs + amd64 warning
     src/validate-compose.ts  # validateCompose(input)
     src/write-todo.ts        # writeTodo(input)
     src/deploy-tools.ts      # M1/M4: create_deploy_target / set_env_vars / deploy / get_deploy_logs
     src/db-tools.ts          # M2: provisionDatabaseTool
     src/plan/beam-me-up-plan.ts # renderBeamMeUpPlan(args) -> orchestration plan (markdown)
   server/      @beam-me-up/server      (deps: core, detect, tools, @modelcontextprotocol/sdk)
-    src/mcp/server.ts        # createServer(): McpServer — registers the prompt + 10 tools
+    src/mcp/server.ts        # createServer(): McpServer — registers the prompt + 11 tools
     src/server/stdio.ts      # stdio entrypoint (bin)
     src/server/http.ts       # Streamable HTTP entrypoint (createBeamHttpServer; OAuth when OAUTH_* set)
     src/auth/oauth/*         # M5: config / jwt / verifier / metadata / guard

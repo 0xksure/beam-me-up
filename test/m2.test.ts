@@ -219,6 +219,51 @@ async function testNeonAdapter(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
+/* Idempotency: provision reuses an existing project by name           */
+/* ------------------------------------------------------------------ */
+
+async function testNeonDedup(): Promise<void> {
+  process.stdout.write("\n[adapter] NeonProvisioner is idempotent by name\n");
+  // Seed the account with a project of the same name -> provision must REUSE it
+  // (no duplicate created).
+  const mock = installDbMock({
+    neonProjects: [{ id: NEON_PROJECT_ID, name: "chatify-db" }],
+  });
+  try {
+    const provisioner = new NeonProvisioner({ apiKey: "neon-key-abc" });
+    const result = await provisioner.provision({ name: "chatify-db" });
+
+    check(
+      result.resourceId === NEON_PROJECT_ID,
+      `dedup -> reuses the existing project id "${NEON_PROJECT_ID}" (got "${result.resourceId}")`,
+    );
+    check(
+      (result.envVars.DATABASE_URL ?? "").includes("-pooler"),
+      "dedup -> still returns the pooled DATABASE_URL",
+    );
+    check(
+      result.envVars.DATABASE_URL_UNPOOLED === NEON_DIRECT_URI,
+      "dedup -> DATABASE_URL_UNPOOLED is the direct (unpooled) uri",
+    );
+
+    const posted = mock.calls.find(
+      (c) => c.method === "POST" && /\/projects\/?$/.test(new URL(c.url).pathname),
+    );
+    check(posted === undefined, "dedup -> NO POST /projects (no duplicate created)");
+    const listed = mock.calls.find(
+      (c) => c.method === "GET" && /\/projects\/?$/.test(new URL(c.url).pathname),
+    );
+    check(listed !== undefined, "dedup -> GET /projects (looked the project up by name)");
+    check(
+      mock.blocked.length === 0,
+      `dedup -> 0 blocked escapes (got ${JSON.stringify(mock.blocked)})`,
+    );
+  } finally {
+    mock.restore();
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Adapter-level test: UpstashProvisioner                              */
 /* ------------------------------------------------------------------ */
 
@@ -525,6 +570,7 @@ async function testTools(): Promise<void> {
 async function main(): Promise<void> {
   await testNetworkEscapeGuard();
   await testNeonAdapter();
+  await testNeonDedup();
   await testUpstashAdapter();
   await testTools();
   process.stdout.write(`\nm2.test: PASS (${passCount} checks)\n`);

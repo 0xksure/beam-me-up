@@ -40,6 +40,7 @@
 import type {
   AccessControlFinding,
   EnvPlan,
+  PreflightFile,
   PreflightScanInput,
   PreflightScanOutput,
   PreflightStack,
@@ -78,6 +79,7 @@ export function preflightScan(
     build,
   );
   const summary = buildSummary(stack, secrets, accessControl);
+  const notProvided = computeNotProvided(files);
 
   return {
     signals,
@@ -89,8 +91,45 @@ export function preflightScan(
     build,
     securityFollowups,
     instructions,
+    notProvided,
     summary,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* input-completeness                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Relevant files the scan relies on but did NOT receive, each with the finding
+ * it leaves unverified. The scan's quality hinges on the host passing the right
+ * files (the canonical trap: omitting .gitignore -> a false "add .env to
+ * .gitignore"). This makes that gap explicit instead of silent.
+ */
+function computeNotProvided(files: PreflightFile[]): string[] {
+  const have = new Set(
+    files.map((f) => (f?.path ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? ""),
+  );
+  const out: string[] = [];
+
+  if (!have.has(".gitignore")) {
+    out.push(
+      ".gitignore — .env / secret-in-git hygiene findings are UNVERIFIED (pass it and re-run)",
+    );
+  }
+  const manifests = [
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "go.mod",
+    "gemfile",
+  ];
+  if (!manifests.some((m) => have.has(m))) {
+    out.push(
+      "a manifest (package.json / pyproject.toml / go.mod / …) — stack, build, and database detection may be incomplete",
+    );
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */

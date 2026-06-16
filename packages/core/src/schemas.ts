@@ -181,6 +181,56 @@ export type CheckCredentialsOutput = z.infer<
 >;
 
 /* ------------------------------------------------------------------ */
+/* build_image_plan (guard the host-owned docker build/push)           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * build_image_plan is a PURE tool that emits the exact, ordered commands the
+ * host AI should run to build + push a container image, plus the prerequisites
+ * to check and the footguns to avoid — chiefly the linux/amd64 one. It does NOT
+ * run anything (the server has no shell); it turns the riskiest, most
+ * environment-fragile seam in a DigitalOcean deploy into a checked recipe.
+ */
+export const buildImagePlanInputShape = {
+  repository: z
+    .string()
+    .describe('The image repository / app name, e.g. "web".'),
+  registry: z
+    .string()
+    .optional()
+    .describe(
+      "Registry name/owner: a DOCR registry name, a Docker Hub org, or a GHCR owner. Omit for DOCR to have the recipe discover it via `doctl registry get`.",
+    ),
+  registryType: z
+    .enum(["docr", "dockerhub", "ghcr"])
+    .optional()
+    .describe('Defaults to "docr" (DigitalOcean Container Registry).'),
+  tag: z
+    .string()
+    .optional()
+    .describe('Image tag. Pin a real version or git SHA, not "latest".'),
+  contextPath: z
+    .string()
+    .optional()
+    .describe('Docker build context. Defaults to ".".'),
+} as const;
+export const BuildImagePlanInputSchema = z.object(buildImagePlanInputShape);
+export type BuildImagePlanInput = z.infer<typeof BuildImagePlanInputSchema>;
+
+export const buildImagePlanOutputShape = {
+  /** The full image reference the host should build + push + then `deploy`. */
+  imageRef: z.string(),
+  /** Ordered shell commands to run (login, buildx build --push). */
+  commands: z.array(z.string()),
+  /** Things to verify first (docker daemon, buildx, registry auth). */
+  prerequisites: z.array(z.string()),
+  /** Footguns — chiefly the linux/amd64 cross-build requirement. */
+  warnings: z.array(z.string()),
+} as const;
+export const BuildImagePlanOutputSchema = z.object(buildImagePlanOutputShape);
+export type BuildImagePlanOutput = z.infer<typeof BuildImagePlanOutputSchema>;
+
+/* ------------------------------------------------------------------ */
 /* beam_me_up prompt                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -282,14 +332,24 @@ export const deployInputShape = {
   projectName: z.string(),
   framework: z.string().optional(),
   /** Vercel: the local files to upload + deploy. Required for provider "vercel". */
-  files: z.array(DeployFileSchema).optional(),
+  files: z
+    .array(DeployFileSchema)
+    .optional()
+    .describe(
+      'REQUIRED when provider="vercel" (the local files to upload). Ignored for provider="digitalocean".',
+    ),
   /**
    * DigitalOcean: a container image reference to deploy, e.g.
    * "registry.digitalocean.com/myreg/web:1.2.3", "docker.io/acme/web:1.2.3",
    * "ghcr.io/acme/web:1.2.3", or "acme/web:1.2.3" (Docker Hub). Required for
    * provider "digitalocean".
    */
-  image: z.string().optional(),
+  image: z
+    .string()
+    .optional()
+    .describe(
+      'REQUIRED when provider="digitalocean" (a container image ref, e.g. "registry.digitalocean.com/reg/web:1.2.3"). Ignored for provider="vercel".',
+    ),
   target: z.enum(["production", "preview"]).optional(),
 } as const;
 export const DeployInputSchema = z.object(deployInputShape);
@@ -503,7 +563,12 @@ export type BuildPlan = z.infer<typeof BuildPlanSchema>;
 
 export const preflightScanInputShape = {
   files: z.array(PreflightFileSchema),
-  /** product (public) vs internal (allowlist) — tunes access-control checks. */
+  /**
+   * product (public sign-in expected) vs internal (allowlist required). It tunes
+   * the access-control checks: in "internal" a missing ALLOWED_EMAILS/
+   * ALLOWED_DOMAIN allowlist is flagged; in "product" it is not. Defaults to
+   * "product".
+   */
   mode: z.enum(["product", "internal"]).optional(),
 } as const;
 export const PreflightScanInputSchema = z.object(preflightScanInputShape);
@@ -519,6 +584,13 @@ export const preflightScanOutputShape = {
   build: BuildPlanSchema,
   securityFollowups: z.array(z.string()),
   instructions: z.array(z.string()),
+  /**
+   * Relevant files the scan EXPECTED but did NOT receive in `files`, each with
+   * the finding it leaves unverified (e.g. ".gitignore — .env-hygiene findings
+   * unverified"). preflight_scan's quality depends on the host passing the right
+   * files; this tells the host what to add and re-run. Empty when nothing's missing.
+   */
+  notProvided: z.array(z.string()),
   summary: z.string(),
 } as const;
 export const PreflightScanOutputSchema = z.object(preflightScanOutputShape);

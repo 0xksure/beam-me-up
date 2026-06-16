@@ -165,11 +165,45 @@ function captureBody(init: FetchInit): unknown {
 function cannedNeon(
   method: string,
   url: string,
+  neonProjects: Array<{ id: string; name: string }>,
 ): { response: Response; matched: boolean } {
   const u = new URL(url);
   const path = u.pathname;
 
-  // POST .../projects  -> create project
+  // GET .../projects/{id}/connection_uri  -> pooled (default) or direct uri.
+  if (method === "GET" && /\/projects\/[^/]+\/connection_uri\/?$/.test(path)) {
+    const direct = u.searchParams.get("pooled") === "false";
+    return {
+      matched: true,
+      response: jsonResponse({ uri: direct ? NEON_DIRECT_URI : NEON_POOLED_URI }),
+    };
+  }
+
+  // GET .../projects/{id}/databases  -> default database (idempotent reuse path).
+  if (method === "GET" && /\/projects\/[^/]+\/databases\/?$/.test(path)) {
+    return {
+      matched: true,
+      response: jsonResponse({ databases: [{ name: NEON_DATABASE_NAME }] }),
+    };
+  }
+
+  // GET .../projects/{id}/roles  -> owner role (idempotent reuse path).
+  if (method === "GET" && /\/projects\/[^/]+\/roles\/?$/.test(path)) {
+    return {
+      matched: true,
+      response: jsonResponse({ roles: [{ name: NEON_ROLE_NAME }] }),
+    };
+  }
+
+  // GET .../projects  -> list (dedup-by-name lookup). Seeded for the dedup test.
+  if (method === "GET" && /\/projects\/?$/.test(path)) {
+    return {
+      matched: true,
+      response: jsonResponse({ projects: neonProjects, pagination: {} }),
+    };
+  }
+
+  // POST .../projects  -> create project.
   if (method === "POST" && /\/projects\/?$/.test(path)) {
     return {
       matched: true,
@@ -179,14 +213,6 @@ function cannedNeon(
         roles: [{ name: NEON_ROLE_NAME }],
         databases: [{ name: NEON_DATABASE_NAME }],
       }),
-    };
-  }
-
-  // GET .../projects/{id}/connection_uri  -> pooled uri
-  if (method === "GET" && /\/projects\/[^/]+\/connection_uri\/?$/.test(path)) {
-    return {
-      matched: true,
-      response: jsonResponse({ uri: NEON_POOLED_URI }),
     };
   }
 
@@ -249,7 +275,10 @@ function cannedUpstash(
   };
 }
 
-export function installDbMock(): DbMock {
+export function installDbMock(
+  opts: { neonProjects?: Array<{ id: string; name: string }> } = {},
+): DbMock {
+  const neonProjects = opts.neonProjects ?? [];
   const calls: RecordedCall[] = [];
   const blocked: DbMock["blocked"] = [];
   const original = globalThis.fetch;
@@ -276,7 +305,7 @@ export function installDbMock(): DbMock {
 
     const { response, matched } =
       host === NEON_HOST
-        ? cannedNeon(method, url)
+        ? cannedNeon(method, url, neonProjects)
         : cannedUpstash(method, url);
 
     // A recognised host but an unmocked path: record it so the suite can fail
