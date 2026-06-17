@@ -1,87 +1,77 @@
 # Beam Me Up
 
-An MCP server that orchestrates taking a repo from "it runs locally" to "it's
-live" — by handing the host AI (Claude Code / Cursor) an ordered plan and a set
-of pure, deterministic tools it can call along the way.
+An MCP server that takes a vibe-coded repo from "it runs locally" to "it's live."
+You connect it to an MCP host (Claude Code / Cursor), open your project, and say:
 
-> **Milestone M0** — the runnable skeleton: **one prompt + three pure
-> (no-network) tools**, so you can connect it to an MCP client and watch the
-> "beam me up" plan fire.
->
-> **Milestone M1 (now live)** — **real Vercel deploys**: four new tools
-> (`create_deploy_target`, `set_env_vars`, `deploy`, `get_deploy_logs`) that talk
-> to the Vercel REST API behind a pluggable `DeployTarget` adapter. See
-> [Real deploys with Vercel (M1)](#real-deploys-with-vercel-m1) below.
->
-> **Milestone M2 (now live)** — **headless database provisioning**: one new tool
-> (`provision_database`) that creates a managed database behind a pluggable
-> `DbProvisioner` adapter and hands back connection-string env vars —
-> `postgres` → **Neon**, `redis` → **Upstash**. Creds come from env vars
-> (`NEON_API_KEY`, `UPSTASH_EMAIL` + `UPSTASH_API_KEY`). See
-> [Provision a database (M2)](#provision-a-database-m2) below.
->
-> **Milestone M3 (now live)** — **preflight scan**: one new pure tool
-> (`preflight_scan`) that reviews the repo for security + functionality. It
-> detects the stack (frontend / backend / databases) and services, finds
-> hardcoded secrets and emits a gitignored-`.env` migration plan (secret values
-> are masked in the findings), flags access-control gaps, and returns a detected
-> install/build/test/start plan with ordered instructions. See
-> [Preflight scan (M3)](#preflight-scan-m3) below.
->
-> **Milestone M4 (now live)** — **DigitalOcean deploys**: the deploy tools
-> (`create_deploy_target`, `set_env_vars`, `deploy`, `get_deploy_logs`) now also
-> target **DigitalOcean App Platform** via a container image — `provider:
-> "digitalocean"` with `DIGITALOCEAN_TOKEN`, behind the same `DeployTarget`
-> adapter. The host AI builds + pushes the image (DOCR / Docker Hub / GHCR) and
-> `deploy` rolls it out; `create_deploy_target` is idempotent (reuses an existing
-> app by name, so "beam me up" on an already-deployed app just redeploys). See
-> [Deploy to DigitalOcean (M4)](#deploy-to-digitalocean-m4) below.
->
-> **Milestone M5 (now live)** — **OAuth on the HTTP transport**: the Streamable
-> HTTP server can now require a verified bearer token on `/mcp` and publishes
-> RFC 9728 protected-resource metadata, so it is safe to run off-localhost.
-> Configure it with `OAUTH_ISSUER` / `OAUTH_AUDIENCE` + a key (HS256 secret or
-> RS256 public key); unconfigured, it stays no-auth for local dev. See
-> [OAuth on the HTTP transport (M5)](#oauth-on-the-http-transport-m5) below. The
-> remaining milestone, M6 (monorepo split + packaging), is now done too — the
-> codebase is an npm-workspaces monorepo under `packages/*`.
+> **beam me up**
+
+The host AI then follows an ordered plan, calling this server's tools to review
+the code, pick where to deploy, provision the database, and ship it — asking you
+to confirm anything risky along the way. If the project is already deployed,
+"beam me up" just builds and redeploys.
+
+The server is **pure**: it never touches your filesystem or the network for
+analysis. The host AI reads and writes your files with its own tools and passes
+the contents in; only the deploy/provision tools make real provider API calls,
+reading their tokens from the environment. Secrets are never echoed back.
 
 ---
 
-## What M0 is
+## What it does
 
-M0 is the runnable skeleton (ESM, Node 20+; M6 later split the codebase into the
-`packages/*` monorepo) that exposes, over the MCP protocol:
+When you say "beam me up", the host AI works through this flow:
 
-- **1 prompt** — `beam_me_up`: returns the ordered, numbered orchestration plan
-  the host AI follows. Each step is tagged `[HOST-AI]`, `[MCP-TOOL: <name>]`, or
-  `[CONFIRM]`, and steps that aren't live in M0 are marked **coming soon**.
-- **3 pure tools** (deterministic, no network):
-  - `route_target` — decide Vercel (serverless) vs a container host
-    (DigitalOcean) from repo signals; returns target, recommended provider,
-    confidence, and human-readable reasons.
-  - `validate_compose` — validate a provided `docker-compose.yml`, or generate
-    one from detected services.
-  - `write_todo` — produce `TODO.md` (manual setup, security follow-ups, ship
-    checklist, operate) plus a structured ship checklist.
+1. **Check credentials** — which providers are usable (`check_credentials`).
+2. **Inventory the repo** — read the files (host AI's own tools).
+3. **Review** — `preflight_scan` returns the detected stack (frontend / backend /
+   databases), hardcoded secrets (masked) with a gitignored-`.env` migration
+   plan, access-control + login findings, and a build/run plan. `review_code`
+   adds a deeper vulnerability pass.
+4. **Apply fixes** — move secrets into `.env`, address findings; if there's no
+   login, the host AI offers to add Google sign-in (`scaffold_auth`).
+5. **Route** — `route_target` decides Vercel (serverless) vs a container host
+   (DigitalOcean); `validate_compose` validates/generates a `docker-compose.yml`
+   when needed.
+6. **Provision** — `provision_database` creates a managed Postgres (Neon) or
+   Redis (Upstash) and returns its connection-string env vars.
+7. **Deploy** — `create_deploy_target` → `set_env_vars` → `deploy` →
+   `get_deploy_logs`, on Vercel or DigitalOcean App Platform.
+8. **Hand off** — `write_todo` produces a `TODO.md` ship checklist; the host AI
+   prints the live URL.
 
-The host AI uses **its own file tools** to read/write the repo; the MCP server
-itself never touches the filesystem or the network.
+You can also call any tool directly ("review this repo", "provision a Postgres
+DB", "add Google login") — the plan is just the default end-to-end path.
 
-### M0 status of the implementation areas
+## The tools
 
-The SDK wiring, schemas, and entrypoints are complete, and all four logic
-areas — the plan renderer, signal detection + routing, compose
-generation/validation, and the TODO writer — are **implemented**. `npm run
-typecheck`, `npm run build`, and `npm test` all pass, and both the stdio and
-HTTP entrypoints start and serve the prompt + three tools.
+**Pure** (deterministic, no filesystem/network — the host AI applies the output):
+
+| Tool | What it does |
+| --- | --- |
+| `check_credentials` | Reports which provider tokens are present (booleans; values never read out). |
+| `preflight_scan` | Repo review: stack/services, masked hardcoded-secret findings + `.env` migration plan, access-control posture, a positive login assessment, and a build/test/start plan. |
+| `review_code` | Heuristic vulnerability review (XSS, SQL/command injection, info-disclosure, disabled TLS, missing auth/headers/rate-limit, eval, weak crypto, open redirect) with fixes. |
+| `route_target` | Recommends Vercel vs a container host from repo signals, with confidence + reasons. |
+| `validate_compose` | Validates a `docker-compose.yml`, or generates one from detected services. |
+| `scaffold_auth` | Generates a Google sign-in scaffold (Next.js / Express / generic; optional internal-mode email allowlist). |
+| `build_image_plan` | Emits the exact `docker buildx … --push` recipe (incl. the `linux/amd64` requirement) for a container deploy. |
+| `write_todo` | Produces `TODO.md` (manual setup, security follow-ups, ship checklist, operate) + a structured checklist. |
+
+**Live** (real provider API calls; tokens from the environment; secrets never echoed):
+
+| Tool | What it does |
+| --- | --- |
+| `provision_database` | Creates a managed DB and returns its env vars — `postgres` → Neon, `redis` → Upstash. |
+| `create_deploy_target` | Creates (or reuses) a Vercel project or a DigitalOcean App Platform app. |
+| `set_env_vars` | Upserts environment variables onto the deploy target. |
+| `deploy` | Deploys — Vercel uploads local files; DigitalOcean rolls out a container image. |
+| `get_deploy_logs` | Reads build logs to confirm success or diagnose a failure. |
 
 ---
 
 ## Requirements
 
-- Node.js >= 20
-- npm
+- Node.js >= 20 and npm
 
 ## Install
 
@@ -89,59 +79,12 @@ HTTP entrypoints start and serve the prompt + three tools.
 npm install
 ```
 
-## Run
+## Connect it
 
-Two transports are provided.
+There are two ways to use Beam Me Up: **download it** and run it as a local
+stdio server, or run it as an **HTTP API** and point clients at it.
 
-### stdio (recommended for Claude Code / Cursor)
-
-```bash
-npm run dev:stdio        # tsx packages/server/src/server/stdio.ts
-# or, after `npm run build`:
-npm run start:stdio      # node packages/server/dist/server/stdio.js
-```
-
-### Streamable HTTP
-
-```bash
-npm run dev:http         # tsx packages/server/src/server/http.ts  (PORT defaults to 3000)
-# or, after `npm run build`:
-npm run start:http       # node packages/server/dist/server/http.js
-```
-
-The HTTP server binds **`127.0.0.1:3000`** by default (loopback only) and serves
-`/mcp`. To expose it, set `BEAM_HTTP_HOST` (e.g. `0.0.0.0`) — but it then
-**refuses to start without OAuth** unless you set `BEAM_HTTP_ALLOW_INSECURE=1`.
-To run it **safely off-localhost, configure OAuth** (M5): set `OAUTH_ISSUER` +
-`OAUTH_AUDIENCE` + a key and every `/mcp` request must carry a verified bearer
-token. The `/mcp` endpoint also validates the `Host`/`Origin` headers
-(DNS-rebinding protection; allowlist extra hosts via `BEAM_HTTP_ALLOWED_HOSTS` /
-`BEAM_HTTP_ALLOWED_ORIGINS`). See
-[OAuth on the HTTP transport (M5)](#oauth-on-the-http-transport-m5) below.
-
-## Other scripts
-
-```bash
-npm run typecheck        # tsc --noEmit -p tsconfig.json (whole workspace)
-npm run build            # tsc -b tsconfig.solution.json -> per-package dist/
-npm test                 # tsx packages/server/src/smoke-test.ts (in-memory client test)
-npm run test:m1          # tsx test/m1.test.ts (M1 deploy tests, mocked Vercel API)
-npm run test:m2          # tsx test/m2.test.ts (M2 DB-provision tests, mocked Neon/Upstash APIs)
-npm run test:m3          # tsx test/m3.test.ts (M3 preflight_scan tests, pure / no network)
-npm run test:m4          # tsx test/m4.test.ts (M4 DigitalOcean deploy tests, mocked DO API)
-npm run test:m5          # tsx test/m5.test.ts (M5 OAuth HTTP tests, pure crypto + ephemeral-port HTTP)
-npm run test:m7          # tsx test/m7.test.ts (review_code vulnerability-review tests, pure)
-npm run test:m8          # tsx test/m8.test.ts (M8 login detection + scaffold_auth + HTTP hardening)
-```
-
----
-
-## Connect to Claude Code
-
-There are two ways to consume Beam Me Up: **download it** and run it as a local
-stdio MCP, or call the **MCP API** (the Streamable HTTP transport).
-
-### stdio (download it)
+### stdio (download it — recommended for Claude Code / Cursor)
 
 Point the command at your local clone (use the absolute path to *your* checkout):
 
@@ -149,373 +92,147 @@ Point the command at your local clone (use the absolute path to *your* checkout)
 claude mcp add beam-me-up -- npx tsx /ABSOLUTE/PATH/TO/beam-me-up/packages/server/src/server/stdio.ts
 ```
 
-### Streamable HTTP (the MCP API)
+### HTTP API
 
-Start the HTTP server first (`npm run dev:http`), then:
+Start the HTTP server, then register it:
 
 ```bash
+npm run dev:http     # tsx packages/server/src/server/http.ts (PORT defaults to 3000)
 claude mcp add --transport http beam-me-up-http http://localhost:3000/mcp
 ```
 
-The HTTP server is loopback-only and unauthenticated by default; to share it as a
-real API, bind a host and configure OAuth (see
-[OAuth on the HTTP transport (M5)](#oauth-on-the-http-transport-m5)).
+The HTTP server binds **`127.0.0.1` only** and runs **no-auth by default** (local
+dev). To share it as a real API, bind a host and turn on OAuth — see
+[Running it as a shared API](#running-it-as-a-shared-api).
 
-Once connected, invoke the `beam_me_up` prompt and let the host AI follow the
-plan, calling `route_target`, `validate_compose`, and `write_todo` as it goes.
+Once connected, invoke the `beam_me_up` prompt (or just say "beam me up") and let
+the host AI follow the plan.
 
----
-
-## Real deploys with Vercel (M1)
-
-M1 makes the deploy step **live for Vercel**. The server now exposes four
-additional tools, all routed through a single pluggable `DeployTarget` adapter
-(`packages/adapters/src/deploy/interface.ts`); the Vercel implementation lives
-under `packages/adapters/src/deploy/vercel/`:
-
-- **`create_deploy_target`** — create the Vercel project (`POST /v10/projects`)
-  and return its `targetId` + dashboard URL.
-- **`set_env_vars`** — upsert environment variables
-  (`POST /v10/projects/{id}/env?upsert=true`). Secret vars are stored as Vercel
-  `sensitive` (write-only) values and are **never echoed back**.
-- **`deploy`** — two-phase deploy: SHA1-hash and upload each file
-  (`POST /v2/files` with an `x-vercel-digest` header), then create the
-  deployment (`POST /v13/deployments`). Returns `deploymentId`, the live `url`,
-  and a normalised `status` (`queued` / `building` / `ready` / `error` /
-  `canceled`).
-- **`get_deploy_logs`** — read a deployment's build events
-  (`GET /v3/deployments/{id}/events`) so the host AI can diagnose a failed build.
-
-M1 shipped Vercel deploys; M4 adds **DigitalOcean** behind the same four tools
-(see [Deploy to DigitalOcean (M4)](#deploy-to-digitalocean-m4)). For the Vercel
-flow below, pass `provider: "vercel"`.
-
-### 1. Get a Vercel token
-
-Create a token at **Vercel → Account Settings → Tokens**
-(<https://vercel.com/account/tokens>). If your project lives under a Vercel
-**Team**, also grab the team id from **Team Settings → General → Team ID** (or
-the `team_…` value in your dashboard URL).
-
-### 2. Export your credentials
-
-The deploy tools read credentials from the environment (full remote OAuth is a
-separate upcoming milestone — see the roadmap):
+You can also run the server standalone:
 
 ```bash
-export VERCEL_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxx   # required
-export VERCEL_TEAM_ID=team_xxxxxxxxxxxx        # optional; only for team projects
-```
-
-When `VERCEL_TEAM_ID` is set it is appended as `?teamId=…` to every Vercel API
-call. If `VERCEL_TOKEN` is missing, the tools return a clear *"set the
-VERCEL_TOKEN environment variable"* error rather than attempting a call.
-
-Launch the server with those vars in scope, e.g.:
-
-```bash
-VERCEL_TOKEN=… VERCEL_TEAM_ID=… npm run start:stdio
-```
-
-or, when registering with Claude Code, ensure the vars are exported in the shell
-that launches the MCP server.
-
-### 3. The host-AI flow
-
-With the token in place, the host AI (Claude Code / Cursor) follows the
-`beam_me_up` plan and now actually ships:
-
-1. Inventory the repo and call **`route_target`** → confirm Vercel fits
-   (serverless app, no long-lived process). If it routes to a container host,
-   use the DigitalOcean flow instead (see
-   [Deploy to DigitalOcean (M4)](#deploy-to-digitalocean-m4)).
-2. Call **`create_deploy_target`** with `{ provider: "vercel", projectName,
-   framework? }` → get back a `targetId`.
-3. Call **`set_env_vars`** with `{ provider: "vercel", targetId, vars: [...] }`
-   to push the app's env (DB URL, OAuth client id/secret, app secrets,
-   `ALLOWED_EMAILS` / `ALLOWED_DOMAIN`). Mark sensitive values `secret: true`.
-4. The host AI reads the build output with **its own file tools** and calls
-   **`deploy`** with `{ provider: "vercel", targetId, projectName, framework?,
-   files: [{ path, content | contentBase64 }], target?: "production" |
-   "preview" }` → get back the `deploymentId` and live `url`.
-5. Poll **`get_deploy_logs`** with `{ provider: "vercel", deploymentId }` to
-   watch the build and surface any failure summary.
-6. Call **`write_todo`** with the `liveUrl` to produce the final `TODO.md` +
-   ship checklist.
-
-> **Safety:** the only network the server ever touches is `api.vercel.com`, and
-> only when a deploy tool is invoked with a valid token. The M1 test suite
-> (`npm run test:m1`) runs the entire flow against an offline mock of
-> `globalThis.fetch` and **fails loudly if any request escapes to a non-Vercel
-> host or an unmocked endpoint** — so no real Vercel call happens during tests.
-
-### Run the M1 tests
-
-```bash
-npm run test:m1          # tsx test/m1.test.ts — fully offline, mocked Vercel API
+npm run dev:stdio    # tsx packages/server/src/server/stdio.ts
+# or, after `npm run build`:
+npm run start:stdio  # node packages/server/dist/server/stdio.js
+npm run start:http   # node packages/server/dist/server/http.js
 ```
 
 ---
 
-## Provision a database (M2)
+## Configuration
 
-M2 makes the database step **live and headless**. One new tool,
-**`provision_database`**, creates a managed database behind a pluggable
-`DbProvisioner` adapter and returns the connection-string env vars to push onto
-your deploy target with `set_env_vars`:
+All credentials are read from the environment of the process that launches the
+server, and only when the relevant tool is called. Export them in the shell that
+starts the MCP server (or your client's MCP env config). Nothing is needed for
+the pure analysis tools.
 
-- **`engine: "postgres"`** → **Neon**. Returns `envVars` with a pooled
-  `DATABASE_URL` (host contains `-pooler`) plus a direct `DATABASE_URL_UNPOOLED`.
-  Needs `NEON_API_KEY`.
-- **`engine: "redis"`** → **Upstash**. Returns `envVars` with `REDIS_URL`
-  (`rediss://default:…`), `UPSTASH_REDIS_REST_URL` and
+```bash
+# Deploy to Vercel
+export VERCEL_TOKEN=…            # https://vercel.com/account/tokens
+export VERCEL_TEAM_ID=team_…     # optional; only for projects under a Vercel Team
+
+# Deploy to DigitalOcean App Platform
+export DIGITALOCEAN_TOKEN=dop_v1_…   # https://cloud.digitalocean.com/account/api/tokens
+
+# Provision a database
+export NEON_API_KEY=neon_…       # postgres → Neon: https://console.neon.tech/app/settings/api-keys
+export UPSTASH_EMAIL=you@…       # redis → Upstash: https://console.upstash.com/account/api
+export UPSTASH_API_KEY=…
+```
+
+If a required token is unset, the tool returns a clear error naming the variable
+to set rather than attempting a call.
+
+---
+
+## Deploy targets
+
+The deploy tools (`create_deploy_target`, `set_env_vars`, `deploy`,
+`get_deploy_logs`) work for both providers behind one pluggable adapter; pass
+`provider: "vercel"` or `provider: "digitalocean"`.
+
+**Vercel** (serverless). `deploy` does a two-phase upload: SHA-hash and upload
+each file, then create the deployment. The host AI passes the files to ship as
+`{ path, content | contentBase64 }`. Returns the live URL + a normalized status.
+
+**DigitalOcean App Platform** (containers). An app is one spec holding the image
+and env vars. The host AI builds and pushes the image itself (use
+`build_image_plan` for the exact `docker buildx --platform linux/amd64 … --push`
+recipe), then `deploy` references it as `image` (DOCR / Docker Hub / GHCR).
+`create_deploy_target` is **idempotent** — re-running "beam me up" on an existing
+app just redeploys.
+
+## Databases
+
+`provision_database` creates a managed database and returns the connection-string
+env vars to feed straight into `set_env_vars`:
+
+- **`engine: "postgres"` → Neon** — `DATABASE_URL` (pooled) +
+  `DATABASE_URL_UNPOOLED` (direct). Needs `NEON_API_KEY`.
+- **`engine: "redis"` → Upstash** — `REDIS_URL`, `UPSTASH_REDIS_REST_URL`,
   `UPSTASH_REDIS_REST_TOKEN`. Needs `UPSTASH_EMAIL` + `UPSTASH_API_KEY`.
 
-Other engines return `"M2 supports postgres (Neon) and redis (Upstash) only"`,
-and a missing credential returns a clear error naming the env var(s) to set.
+The connection strings are returned so the host can wire them up; treat the tool
+output as sensitive (don't log it).
 
-Under the hood (verified against the live provider APIs on 2026-06-15):
+## Security & login review
 
-- **Neon** (`https://console.neon.tech/api/v2`, `Authorization: Bearer
-  $NEON_API_KEY`): `POST /projects` creates the project, then
-  `GET /projects/{id}/connection_uri?database_name=…&role_name=…&pooled=true`
-  fetches the pooled URI. `DATABASE_URL` is the pooled URI; `DATABASE_URL_UNPOOLED`
-  is the direct `connection_uri` from the create response.
-- **Upstash** (`https://api.upstash.com/v2`, HTTP Basic
-  `base64("$UPSTASH_EMAIL:$UPSTASH_API_KEY")`): `POST /redis/database` with the
-  **real** body `{ database_name, primary_region, platform: "aws", tls: true }`
-  (the optional `region` input maps to `primary_region`, default `us-east-1`).
-  Note the field is `database_name`, not `name`, and `platform` is required by the
-  real API — the adapter, the offline mock, and the test all pin this real shape.
+`preflight_scan` and `review_code` are pure, best-effort **heuristic** reviews —
+useful pre-deploy hygiene, not a full SAST/pentest:
 
-### Get your database credentials
+- **Secrets** — hardcoded credentials (private keys, cloud/provider keys incl.
+  Google OAuth client secrets, connection strings, JWTs) are flagged with the
+  value **masked**, plus a `.env` migration plan (what to write, gitignore, and
+  the `process.env` replacements).
+- **Access control** — wildcard CORS, missing auth middleware, unguarded
+  `/admin` routes, debug-on, weak/committed framework secrets, and (in
+  `mode: "internal"`) a missing `ALLOWED_EMAILS` / `ALLOWED_DOMAIN` allowlist.
+- **Login** — a positive `auth` read: whether login is implemented, the detected
+  mechanisms/providers, a confidence, and the signals behind it. When there's no
+  login but the app serves requests, the plan offers to add **Google sign-in**
+  via `scaffold_auth`, which returns the dependencies, env vars, OAuth redirect
+  URIs, and files to write — tailored to Next.js (Auth.js), Express
+  (passport-google-oauth20), or a generic fallback.
 
-```bash
-# postgres -> Neon: create an API key at https://console.neon.tech/app/settings/api-keys
-export NEON_API_KEY=neon_xxxxxxxxxxxxxxxx
-# redis -> Upstash: account email + API key from https://console.upstash.com/account/api
-export UPSTASH_EMAIL=you@example.com
-export UPSTASH_API_KEY=xxxxxxxxxxxxxxxx
-```
+Dependency CVE scanning stays the host AI's job (e.g. `npm audit`).
 
-### The host-AI flow
+## Running it as a shared API
 
-1. Call **`provision_database`** with `{ engine: "postgres", name: "myapp-db" }`
-   (or `{ engine: "redis", … }`). Capture the returned `envVars`.
-2. Pass those `envVars` straight into **`set_env_vars`** for your deploy target.
-3. Deploy. The credential and connection strings are **never echoed back** in
-   the tool result.
+The stdio transport is local by construction. The HTTP transport can drive real
+deploys, so it's hardened for exposure:
 
-> **Safety:** the only hosts the server touches for M2 are `console.neon.tech`
-> and `api.upstash.com`, and only when `provision_database` is invoked with valid
-> credentials. The M2 test suite (`npm run test:m2`) runs the whole flow against
-> an offline mock of `globalThis.fetch` and **fails loudly if any request
-> escapes to another host or an unmocked endpoint** — no real DB is created
-> during tests.
+- Binds **`127.0.0.1` by default**; set `BEAM_HTTP_HOST` (e.g. `0.0.0.0`) to
+  expose it — but it then **refuses to start without OAuth** unless you set
+  `BEAM_HTTP_ALLOW_INSECURE=1`.
+- The `/mcp` endpoint validates the `Host`/`Origin` headers (DNS-rebinding
+  protection); allowlist extra ones via `BEAM_HTTP_ALLOWED_HOSTS` /
+  `BEAM_HTTP_ALLOWED_ORIGINS`.
 
-### Run the M2 tests
-
-```bash
-npm run test:m2          # tsx test/m2.test.ts — fully offline, mocked Neon/Upstash APIs
-```
-
----
-
-## Preflight scan (M3)
-
-M3 makes the **review step real**. One new **pure** tool, **`preflight_scan`**
-(no filesystem, no network — like `route_target`/`validate_compose`/`write_todo`),
-is the "front door" of the plan: the host AI reads the repo with its own tools
-and passes the files in, and the scan returns a structural + security read in one
-call.
-
-Call it with `{ files: [{ path, content }], mode?: "product" | "internal" }`. It
-returns:
-
-- **`signals`** (via the existing `deriveSignals`) + **`services`** + **`stack`**
-  (frontend / backend / databases / languages, plus Dockerfile/compose paths) —
-  **reuse these for `route_target` and `validate_compose`** instead of deriving
-  them by hand.
-- **`secrets`** — hardcoded credentials found in source (private keys, cloud +
-  provider API keys, connection strings, JWTs, generic secret assignments). The
-  matched value is **masked** in the finding (e.g. `sk_live_…prST`); the raw
-  value is never echoed in `secrets`, `summary`, or `securityFollowups`.
-- **`envPlan`** — the `.env` migration: `envFileContent` (the real values, for
-  the gitignored `.env` you write locally), `envExampleContent` (blank
-  placeholders to commit), `gitignoreAdditions` (e.g. `.env`), and `replacements`
-  (swap each inline literal for a `process.env.X` reference).
-- **`accessControl`** — heuristic posture findings: wildcard CORS, missing auth
-  middleware, an unguarded `/admin` route, debug enabled, a weak/committed
-  framework secret, and (for `mode: "internal"`) a missing `ALLOWED_EMAILS` /
-  `ALLOWED_DOMAIN` allowlist.
-- **`build`** — the detected `packageManager` and `install`/`build`/`test`/
-  `start`/`typecheck` commands + ordered `instructions` to **verify the app
-  builds and runs before deploying** (detect-and-instruct; the tool never runs
-  anything).
-- **`securityFollowups`** + **`instructions`** + **`summary`** — feed
-  `securityFollowups` straight into `write_todo` (step 12 of the plan).
-
-> **Why a tool and not just the host AI:** the detection is deterministic and
-> testable in isolation (secret regexes, stack/compose parsing, access-control
-> heuristics), and the masking guarantee — that a found secret never leaks back
-> into the findings or summary — is enforced and unit-tested. Real dependency
-> CVE scanning stays the host AI's job (run `npm audit` etc.); `preflight_scan`
-> is pure and offline.
-
-### Run the M3 tests
-
-```bash
-npm run test:m3          # tsx test/m3.test.ts — pure, no network, no mock
-```
-
----
-
-## Deploy to DigitalOcean (M4)
-
-M4 makes the **container path real**. When `route_target` sends an app to a
-container host (websockets, workers, multi-service compose, long-running
-handlers, persistent disk, or an always-on listener), deploy it to **DigitalOcean
-App Platform** with the *same four deploy tools* — just pass
-`provider: "digitalocean"`.
-
-DigitalOcean's model differs from Vercel's: an App Platform **app is one spec**
-that holds both the container image and the env vars, and `POST`/`PUT /v2/apps`
-each trigger a deployment. The adapter maps the shared `DeployTarget` flow onto
-that:
-
-- **`create_deploy_target`** `{ provider: "digitalocean", projectName }` —
-  **idempotent**: if an app with that name already exists it is reused (so
-  re-running "beam me up" on an already-deployed app just redeploys); otherwise
-  the app is created with a placeholder image that the first real `deploy`
-  replaces. Returns the app `targetId` + dashboard URL.
-- **`set_env_vars`** — merges the vars into the app spec's service (`secret: true`
-  → DO `SECRET` type, encrypted). Never echoed back.
-- **`deploy`** `{ provider: "digitalocean", targetId, projectName, image }` — the
-  host AI **builds the repo's Dockerfile and pushes the image** to a registry
-  with its own tools, then passes the reference as `image`. Accepted forms:
-  `registry.digitalocean.com/<reg>/<repo>:<tag>` (DOCR),
-  `docker.io/<org>/<repo>:<tag>` or `<org>/<repo>:<tag>` (Docker Hub),
-  `ghcr.io/<org>/<repo>:<tag>` (GHCR). DO pulls + rolls it out (it does **not**
-  accept uploaded files). Returns `{ deploymentId, url, status }`.
-- **`get_deploy_logs`** — reads the deployment phase and fetches the build log
-  from its presigned URL.
-
-### 1. Get a DigitalOcean token
-
-Create a personal access token with App Platform write scope at
-**DigitalOcean → API → Tokens** (<https://cloud.digitalocean.com/account/api/tokens>),
-then export it:
-
-```bash
-export DIGITALOCEAN_TOKEN=dop_v1_xxxxxxxxxxxxxxxx
-```
-
-If it is unset the deploy tools return a clear *"set the DIGITALOCEAN_TOKEN
-environment variable"* error rather than attempting a call.
-
-> **Safety:** the only host the server touches for DigitalOcean is
-> `api.digitalocean.com` (plus the presigned log URLs a deployment hands back),
-> and only when a deploy tool is invoked with a valid token. The M4 test suite
-> (`npm run test:m4`) runs the whole flow against an offline mock of
-> `globalThis.fetch` and **fails loudly if any request escapes** to another host
-> or an unmocked endpoint — so no real app is created during tests.
-
-### Run the M4 tests
-
-```bash
-npm run test:m4          # tsx test/m4.test.ts — fully offline, mocked DigitalOcean API
-```
-
----
-
-## OAuth on the HTTP transport (M5)
-
-The stdio transport is local by construction, but the **Streamable HTTP**
-transport needs protecting once it is reachable off-localhost. M5 makes the
-Beam Me Up server an OAuth 2.0 **Resource Server**: it does not issue tokens, it
-**verifies** tokens an external Authorization Server (AS) issued.
-
-When OAuth is configured, the HTTP server:
-
-- requires `Authorization: Bearer <token>` on every `/mcp` request; a missing or
-  malformed token gets **401**, an invalid/expired token **401**, and a token
-  lacking a required scope **403** — each with a
-  `WWW-Authenticate: Bearer resource_metadata="…"` header;
-- publishes **RFC 9728 protected-resource metadata** at
-  `/.well-known/oauth-protected-resource` (the `resource` + the `authorization_servers`
-  the client should use).
-
-Tokens are verified with **`node:crypto` only** (no new deps): JWT signature
-(**HS256** shared secret or **RS256** public key), with the **alg-confusion guard**
-(the header `alg` must match the configured algorithm — `none` and
-RS256↔HS256 downgrades are rejected) and `exp` / `nbf` / `iss` / `aud` checks.
-
-### Configure it
-
-OAuth is **enabled** as soon as an issuer, an audience, and a key are present;
-with none set, the server stays no-auth for local dev.
+**OAuth.** The server is an OAuth 2.0 **Resource Server**: it verifies bearer
+tokens an external Authorization Server issued (it does not issue them). When
+configured, every `/mcp` request needs a valid `Authorization: Bearer <token>`
+(401/403 with `WWW-Authenticate`), and RFC 9728 protected-resource metadata is
+published at `/.well-known/oauth-protected-resource`. Tokens are verified with
+`node:crypto` (HS256 or RS256, alg-confusion guarded; `exp`/`nbf`/`iss`/`aud`
+checked). OAuth turns on as soon as an issuer, audience, and key are set:
 
 ```bash
 export OAUTH_ISSUER=https://your-auth-server.example.com   # must equal the token `iss`
 export OAUTH_AUDIENCE=beam-me-up                           # must appear in the token `aud`
-
 # one of:
-export OAUTH_JWT_SECRET=…            # HS256 shared secret, or
+export OAUTH_JWT_SECRET=…                                  # HS256 shared secret, or
 export OAUTH_JWT_PUBLIC_KEY="$(cat as-public-key.pem)"     # RS256 PEM public key
-
 # optional:
 export OAUTH_RESOURCE_URL=https://beam.example.com/mcp     # default http://localhost:$PORT/mcp
 export OAUTH_REQUIRED_SCOPES="deploy"                      # space/comma-separated; default none
-```
-
-> The AS, token issuance, and (optionally) JWKS-URL key rotation live outside
-> this server — M5 is the resource-server half (metadata + verification). A
-> JWKS-URL fetcher and a full embedded AS are possible later add-ons.
-
-### Run the M5 tests
-
-```bash
-npm run test:m5          # tsx test/m5.test.ts — pure crypto + an ephemeral-port HTTP server, no network
-```
-
----
-
-## Auth audit + Google sign-in (M8)
-
-M8 makes the **login** part of "review for security" real and adds one new tool.
-
-- **Inline password / client-secret check.** `preflight_scan`'s secret detection
-  now also flags **OAuth client secrets** (Google's `GOCSPX-…`) alongside passwords
-  and provider keys — masked, with a `.env` migration plan as before.
-- **Login detection.** `preflight_scan` returns a positive `auth` assessment:
-  `loginImplemented`, the detected `mechanisms` (NextAuth/Auth.js, Passport,
-  express-session, Lucia, Clerk, Supabase Auth, Firebase, Flask-Login, …) and
-  `providers` (google/github/…), a `confidence`, the `signals` behind the verdict,
-  and `offerGoogleAuth`. It is a heuristic — it reports what it can see, not a full
-  auth audit.
-- **Offer + scaffold Google sign-in.** When no login is found but the app serves
-  requests, the plan tells the host AI to **offer** the user Google sign-in; on a
-  yes it calls the new **`scaffold_auth`** tool. `scaffold_auth` is pure — it
-  returns the `dependencies`, `envVars`, OAuth `redirectUris`, and `files` (with
-  contents) to create/merge, tailored to **Next.js** (Auth.js), **Express**
-  (passport-google-oauth20 + express-session), or a **generic** fallback; the host
-  AI writes the files. `mode: "internal"` adds an email-domain allowlist gate.
-- **Hardened HTTP transport** (so the "MCP API" is safe to expose): binds
-  `127.0.0.1` by default, **refuses to start no-auth on a non-loopback host**
-  (unless `BEAM_HTTP_ALLOW_INSECURE=1`), and validates `Host`/`Origin`
-  (DNS-rebinding protection).
-
-```bash
-npm run test:m8          # tsx test/m8.test.ts — login detection + scaffold_auth + HTTP hardening, pure
 ```
 
 ---
 
 ## Project layout
 
-M6 split the codebase into an **npm-workspaces monorepo** under `packages/*`.
-Each package is a real `@beam-me-up/<name>` package with its own `package.json`
-+ `tsconfig.json`; the dependency graph is a clean DAG (no cycles):
+An npm-workspaces monorepo under `packages/*`. Each package is a real
+`@beam-me-up/<name>` package; the dependency graph is a clean DAG:
 
 ```
 core  ←  detect      ←  adapters  ←  tools  ←  server
@@ -523,89 +240,76 @@ core  ←  templates   ←  tools
 ```
 
 ```
-package.json               # root: workspaces, scripts (typecheck/build/test)
-tsconfig.base.json         # shared compiler options
-tsconfig.json              # typecheck config (paths @beam-me-up/* -> packages/*/src)
-tsconfig.solution.json     # build solution (`tsc -b`): references every package
 packages/
   core/        @beam-me-up/core        (deps: zod)
-    src/schemas.ts           # zod raw shapes + z.objects + inferred types; the shared contract
-  detect/      @beam-me-up/detect      (deps: core)         — pure repo analysis
+    src/schemas.ts           # zod shapes + inferred types; the shared contract
+  detect/      @beam-me-up/detect      (deps: core) — pure repo analysis
     src/signals.ts           # deriveSignals(files) -> RepoSignals
-    src/secrets.ts           # M3: detectSecrets + buildEnvPlan (masked findings + .env plan)
-    src/stack.ts             # M3: detectStack / detectServices / detectBuild
-    src/access-control.ts    # M3: detectAccessControl(files, mode)
-    src/auth-detect.ts       # M8: detectAuth(files) -> login/auth assessment (positive)
+    src/secrets.ts           # detectSecrets + buildEnvPlan (masked findings + .env plan)
+    src/stack.ts             # detectStack / detectServices / detectBuild
+    src/access-control.ts    # detectAccessControl(files, mode)
+    src/auth-detect.ts       # detectAuth(files) -> positive login/auth assessment
     src/route-target.ts      # routeTarget(input) -> RouteTargetOutput
-    src/preflight-scan.ts    # M3: preflightScan(input) (composes the detectors, incl. auth)
-    src/review.ts            # reviewCode(input) -> heuristic vulnerability findings + fixes
+    src/preflight-scan.ts    # preflightScan(input) (composes the detectors)
+    src/review.ts            # reviewCode(input) -> vulnerability findings + fixes
   templates/   @beam-me-up/templates   (deps: core, yaml)
     src/compose.ts           # generateCompose(services) -> docker-compose yaml
     src/todo.ts              # renderTodoMarkdown(...) + shipChecklist(...)
   adapters/    @beam-me-up/adapters    (deps: core, detect) — provider plumbing
-    src/registry.ts          # selectAdapter(provider, token) -> DeployTarget
-    src/token.ts             # getProviderToken + getDbCredentials (provider/DB env vars)
+    src/token.ts             # getProviderToken + getDbCredentials (env vars)
     src/deploy/interface.ts  # DeployTarget contract
-    src/deploy/vercel/*      # VercelClient + VercelAdapter (M1)
-    src/deploy/digitalocean/* # DigitalOceanClient + app-spec + DigitalOceanAdapter (M4)
-    src/db/{interface,registry}.ts + db/neon/* + db/upstash/*  # DbProvisioner (M2)
+    src/deploy/vercel/*       # Vercel adapter
+    src/deploy/digitalocean/* # DigitalOcean App Platform adapter
+    src/db/{neon,upstash}/*   # DbProvisioner adapters
   tools/       @beam-me-up/tools       (deps: core, templates, adapters)
-    src/check-credentials.ts # checkCredentials() -> which provider creds are present (no values)
-    src/build-image-plan.ts  # buildImagePlan() -> exact docker build/push recipe + prereqs + amd64 warning
+    src/check-credentials.ts # which provider creds are present (no values)
+    src/build-image-plan.ts  # docker build/push recipe + amd64 warning
     src/validate-compose.ts  # validateCompose(input)
     src/write-todo.ts        # writeTodo(input)
-    src/scaffold-auth.ts     # M8: scaffoldAuth(input) -> Google sign-in scaffold (nextjs/express/generic)
-    src/deploy-tools.ts      # M1/M4: create_deploy_target / set_env_vars / deploy / get_deploy_logs
-    src/db-tools.ts          # M2: provisionDatabaseTool
-    src/plan/beam-me-up-plan.ts # renderBeamMeUpPlan(args) -> orchestration plan (markdown)
+    src/scaffold-auth.ts     # scaffoldAuth(input) -> Google sign-in scaffold
+    src/deploy-tools.ts      # create_deploy_target / set_env_vars / deploy / get_deploy_logs
+    src/db-tools.ts          # provisionDatabaseTool
+    src/plan/beam-me-up-plan.ts # renderBeamMeUpPlan(args) -> the orchestration plan
   server/      @beam-me-up/server      (deps: core, detect, tools, @modelcontextprotocol/sdk)
-    src/mcp/server.ts        # createServer(): McpServer — registers the prompt + 13 tools
-    src/server/stdio.ts      # stdio entrypoint (bin)
-    src/server/http.ts       # Streamable HTTP (createBeamHttpServer; loopback default, OAuth + Host/Origin guard)
-    src/auth/oauth/*         # M5: config / jwt / verifier / metadata / guard
-    src/smoke-test.ts        # M0 in-memory MCP client test
-test/                        # top-level suites importing the package barrels (@beam-me-up/*)
-  m1.test.ts + vercel-mock.ts          # M1 (mocked Vercel API)
-  m2.test.ts + db-mock.ts              # M2 (mocked Neon/Upstash)
-  m3.test.ts                           # M3 (pure)
-  m4.test.ts + digitalocean-mock.ts    # M4 (mocked DO API)
-  m5.test.ts                           # M5 (pure crypto + ephemeral-port HTTP)
-  m7.test.ts                           # M7 (review_code, pure)
-  m8.test.ts                           # M8 (login detection + scaffold_auth + HTTP hardening, pure)
+    src/mcp/server.ts        # createServer(): registers the prompt + 13 tools
+    src/server/stdio.ts      # stdio entrypoint
+    src/server/http.ts       # Streamable HTTP (loopback default, OAuth + Host/Origin guard)
+    src/auth/oauth/*         # OAuth resource-server: config / jwt / verifier / metadata / guard
+test/                        # offline suites importing the package barrels
 ```
 
-`route_target` + `preflight_scan` live in **detect** (not tools): they are pure
-repo-analysis, and putting them there breaks the would-be `adapters ↔ tools`
-cycle (an adapter's `detectFit` reuses `routeTarget`). Dev + tests run straight
-off the TypeScript sources via `tsx` (the root `tsconfig` maps `@beam-me-up/*` to
-`packages/*/src`); `npm run build` does a project-references `tsc -b` to per-
-package `dist/`.
-
----
+`route_target` + `preflight_scan` live in **detect** (not tools): they're pure
+repo-analysis, and that placement keeps the `adapters → tools` graph acyclic.
 
 ## Design notes
 
-- **Vercel-first, DigitalOcean fallback.** `route_target` recommends a container
-  host when the repo needs a long-lived process (websocket server, background
-  workers, multiple compose app services, long handlers, persistent filesystem
-  writes, or a long-lived port listener). A bare `Dockerfile` is *not* decisive
-  on its own. Otherwise it recommends Vercel. On container or low-confidence
-  outcomes the plan instructs the host AI to **ask the user**.
-- **Nothing hard-blocks shipping.** Ship-checklist items (e.g. register OAuth
-  app, rotate secrets) are surfaced as `blocking: false` reminders.
+- **Vercel-first, DigitalOcean fallback.** `route_target` picks a container host
+  only when the repo needs a long-lived process (websockets, workers, multiple
+  services, long handlers, persistent disk, or an always-on listener). A bare
+  `Dockerfile` isn't decisive. On container/low-confidence outcomes the plan
+  tells the host AI to **ask the user**.
+- **Nothing hard-blocks shipping.** Ship-checklist items (rotate secrets,
+  register OAuth, …) are surfaced as `blocking: false` reminders.
 
----
+## Development
 
-## Roadmap
+```bash
+npm run typecheck    # tsc --noEmit -p tsconfig.json
+npm run build        # tsc -b tsconfig.solution.json -> per-package dist/
+npm test             # in-memory MCP client smoke test
+```
 
-| Milestone | Scope |
-| --------- | ----- |
-| **M0** *(done)* | Runnable MCP server: `beam_me_up` prompt + 3 pure tools (`route_target`, `validate_compose`, `write_todo`). stdio + local HTTP (no auth). In-memory smoke test. |
-| **M1** *(done)* | Real **Vercel** deploys — `create_deploy_target`, `set_env_vars`, `deploy`, `get_deploy_logs` behind a pluggable `DeployTarget` adapter. Token via `VERCEL_TOKEN` / `VERCEL_TEAM_ID`. Fully-mocked offline test suite (`npm run test:m1`). |
-| **M2** *(done)* | Headless **database provisioning** — `provision_database` behind a pluggable `DbProvisioner` adapter (`postgres` → Neon, `redis` → Upstash). Returns pooled connection-string env vars. Creds via `NEON_API_KEY` / `UPSTASH_EMAIL` + `UPSTASH_API_KEY`. Fully-mocked offline test suite (`npm run test:m2`). |
-| **M3** *(done)* | **Preflight scan** — `preflight_scan` (pure, no network): stack/services detection, hardcoded-secret findings (masked) + a gitignored-`.env` migration plan, access-control heuristics, and a detected build/test/start plan. Feeds `route_target` + `write_todo`. Pure offline test suite (`npm run test:m3`). _(CVE scanning is delegated to the host AI; the OAuth/auth scaffold is deferred to a later milestone.)_ |
-| **M4** *(done)* | **DigitalOcean** deploys — `provider: "digitalocean"` on the same four deploy tools, behind the same `DeployTarget` adapter. App Platform container-image deploys (DOCR / Docker Hub / GHCR); image + env vars live in one app spec; idempotent create (redeploy by name); logs via the deployment's presigned URLs. Token via `DIGITALOCEAN_TOKEN`. Fully-mocked offline test suite (`npm run test:m4`). |
-| **M5** *(done)* | **OAuth on the Streamable HTTP transport** — RFC 9728 protected-resource metadata + bearer-token verification (JWT, HS256/RS256 via `node:crypto`, alg-confusion guarded) with 401/403 + `WWW-Authenticate`, env-gated (`OAUTH_*`); unconfigured = no-auth localhost. Pure + ephemeral-port HTTP test suite (`npm run test:m5`). _(JWKS-URL fetch + a full embedded Authorization Server are possible later add-ons.)_ |
-| **M6** *(done)* | **Monorepo split** — npm workspaces under `packages/*`: `@beam-me-up/core` (schemas), `detect` (incl. `route_target` + `preflight_scan`), `templates`, `adapters`, `tools`, `server`. Clean acyclic dependency graph, per-package barrels, project-references build (`tsc -b`), tests run off source via `tsx`. _(The live end-to-end "beam me up" run against real providers needs your tokens, so it stays a manual step.)_ |
-| **M7** *(done)* | **Code review** — `review_code` (pure, heuristic): prioritised vulnerability findings (XSS, SQL/command injection, info-disclosure, disabled TLS, missing auth/headers/rate-limit, eval, weak crypto, open redirect) each with a fix. Pure offline test suite (`npm run test:m7`). |
-| **M8** *(done)* | **Auth audit + Google sign-in** — `preflight_scan` gains inline client-secret detection (`GOCSPX-…`) and a positive `auth` login assessment; new pure **`scaffold_auth`** tool offers + generates a Google sign-in scaffold (Next.js/Express/generic, optional internal-mode allowlist). HTTP transport hardened (loopback default, refuse-insecure, Host/Origin guard) so the **MCP API** is safe to expose. Pure offline test suite (`npm run test:m8`). |
+The suites under `test/` are all **offline** — provider APIs are mocked (and the
+mocks fail loudly if any request escapes to a real host) or pure. Dev and tests
+run straight off the TypeScript sources via `tsx`; `npm run build` does a
+project-references `tsc -b` to per-package `dist/`.
+
+```bash
+npm run test:m1   # Vercel deploy tools (mocked)
+npm run test:m2   # database provisioning, Neon/Upstash (mocked)
+npm run test:m3   # preflight_scan (pure)
+npm run test:m4   # DigitalOcean deploy tools (mocked)
+npm run test:m5   # HTTP transport + OAuth (pure crypto + ephemeral-port server)
+npm run test:m7   # review_code (pure)
+npm run test:m8   # login detection + scaffold_auth + HTTP hardening (pure)
+```
