@@ -42,6 +42,49 @@ When you say "beam me up", the host AI works through this flow:
 You can also call any tool directly ("review this repo", "provision a Postgres
 DB", "add Google login") — the plan is just the default end-to-end path.
 
+## Get started
+
+Two ways to use Beam Me Up — pick one:
+
+### 1. Use our hosted server (nothing to install)
+
+Point your MCP client at the hosted endpoint:
+
+```bash
+claude mcp add --transport http beam-me-up https://<beam-me-up-host>/mcp
+```
+
+> Replace `<beam-me-up-host>` with the published endpoint. The hosted server
+> requires a bearer token — set it as an `Authorization` header in your client's
+> MCP config.
+
+Then open your project and say **beam me up**. Deploys still use *your* provider
+tokens — see [Configuration](#configuration).
+
+### 2. Download the repo and run it yourself
+
+Requires Node.js 20+ and npm. Clone, install, and connect it over stdio:
+
+```bash
+git clone https://github.com/0xksure/beam-me-up.git
+cd beam-me-up
+npm install
+claude mcp add beam-me-up -- npx tsx "$PWD/packages/server/src/server/stdio.ts"
+# or, after `npm run build`: node packages/server/dist/server/stdio.js
+```
+
+Prefer HTTP? Run your own local API instead:
+
+```bash
+npm run dev:http     # serves http://127.0.0.1:3000/mcp (loopback, no-auth dev)
+claude mcp add --transport http beam-me-up-http http://localhost:3000/mcp
+```
+
+The local HTTP server is loopback-only and unauthenticated by default; to expose
+it, see [Running it as a shared API](#running-it-as-a-shared-api).
+
+Once connected, invoke the `beam_me_up` prompt (or just say "beam me up").
+
 ## The tools
 
 **Pure** (deterministic, no filesystem/network — the host AI applies the output):
@@ -69,53 +112,19 @@ DB", "add Google login") — the plan is just the default end-to-end path.
 
 ---
 
-## Requirements
+## Integrations
 
-- Node.js >= 20 and npm
+What it can deploy to today:
 
-## Install
+| Kind | Supported |
+| --- | --- |
+| **Hosting** | **Vercel** (serverless) · **DigitalOcean App Platform** (containers) |
+| **Databases** | **Neon** (Postgres) · **Upstash** (Redis) |
+| **Container registries** | DigitalOcean Container Registry (DOCR) · Docker Hub · GitHub Container Registry (GHCR) |
+| **App auth** | Google sign-in scaffolding for the deployed app (Next.js / Express) |
 
-```bash
-npm install
-```
-
-## Connect it
-
-There are two ways to use Beam Me Up: **download it** and run it as a local
-stdio server, or run it as an **HTTP API** and point clients at it.
-
-### stdio (download it — recommended for Claude Code / Cursor)
-
-Point the command at your local clone (use the absolute path to *your* checkout):
-
-```bash
-claude mcp add beam-me-up -- npx tsx /ABSOLUTE/PATH/TO/beam-me-up/packages/server/src/server/stdio.ts
-```
-
-### HTTP API
-
-Start the HTTP server, then register it:
-
-```bash
-npm run dev:http     # tsx packages/server/src/server/http.ts (PORT defaults to 3000)
-claude mcp add --transport http beam-me-up-http http://localhost:3000/mcp
-```
-
-The HTTP server binds **`127.0.0.1` only** and runs **no-auth by default** (local
-dev). To share it as a real API, bind a host and turn on OAuth — see
-[Running it as a shared API](#running-it-as-a-shared-api).
-
-Once connected, invoke the `beam_me_up` prompt (or just say "beam me up") and let
-the host AI follow the plan.
-
-You can also run the server standalone:
-
-```bash
-npm run dev:stdio    # tsx packages/server/src/server/stdio.ts
-# or, after `npm run build`:
-npm run start:stdio  # node packages/server/dist/server/stdio.js
-npm run start:http   # node packages/server/dist/server/http.js
-```
+`route_target` chooses Vercel vs a container host automatically. See
+[Deploy targets](#deploy-targets) and [Databases](#databases) for the details.
 
 ---
 
