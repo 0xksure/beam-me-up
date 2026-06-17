@@ -557,6 +557,36 @@ export const buildPlanShape = {
 export const BuildPlanSchema = z.object(buildPlanShape);
 export type BuildPlan = z.infer<typeof BuildPlanSchema>;
 
+/**
+ * A positive read on whether the app implements user login/auth, and what kind.
+ * Unlike the access-control `no-auth-middleware` finding (which only fires on the
+ * ABSENCE of an auth keyword), this is an explicit assessment the host AI can act
+ * on: when `loginImplemented` is false and the app exposes routes that imply it
+ * SHOULD have sign-in, `recommendation` offers to scaffold Google auth (call the
+ * `scaffold_auth` tool). It is a best-effort heuristic — `confidence` and
+ * `signals` make the basis explicit rather than implying a real auth audit.
+ */
+export const authAssessmentShape = {
+  /** Best-effort: does the app appear to implement user login/auth? */
+  loginImplemented: z.boolean(),
+  /** Detected auth mechanisms/libraries, e.g. ["next-auth", "passport", "express-session"]. */
+  mechanisms: z.array(z.string()),
+  /** Detected social/OAuth providers if any, e.g. ["google", "github"]. */
+  providers: z.array(z.string()),
+  /** Heuristic confidence in [0,1] for the loginImplemented verdict. */
+  confidence: z.number().min(0).max(1),
+  /** Supporting evidence, each "file:line — what was seen". Never a secret value. */
+  signals: z.array(z.string()),
+  /** Whether mutating/protected routes were seen (implies the app should gate access). */
+  mutatingRoutesPresent: z.boolean(),
+  /** Actionable next step. When login is missing, suggests offering Google auth. */
+  recommendation: z.string(),
+  /** True when the host AI should OFFER to add login (none found but app needs it). */
+  offerGoogleAuth: z.boolean(),
+} as const;
+export const AuthAssessmentSchema = z.object(authAssessmentShape);
+export type AuthAssessment = z.infer<typeof AuthAssessmentSchema>;
+
 /* ------------------------------------------------------------------ */
 /* preflight_scan I/O                                                  */
 /* ------------------------------------------------------------------ */
@@ -581,6 +611,12 @@ export const preflightScanOutputShape = {
   secrets: z.array(SecretFindingSchema),
   envPlan: EnvPlanSchema,
   accessControl: z.array(AccessControlFindingSchema),
+  /**
+   * Positive login/auth assessment: whether the app implements sign-in, by what
+   * mechanism, and — when it's missing but the app needs it — a recommendation to
+   * offer Google auth (scaffold via the `scaffold_auth` tool).
+   */
+  auth: AuthAssessmentSchema,
   build: BuildPlanSchema,
   securityFollowups: z.array(z.string()),
   instructions: z.array(z.string()),
@@ -645,3 +681,90 @@ export const reviewCodeOutputShape = {
 } as const;
 export const ReviewCodeOutputSchema = z.object(reviewCodeOutputShape);
 export type ReviewCodeOutput = z.infer<typeof ReviewCodeOutputSchema>;
+
+/* ================================================================== */
+/* M8 - scaffold_auth (offer + scaffold Google sign-in)                */
+/* ================================================================== */
+
+/*
+ * scaffold_auth is a PURE tool (no filesystem/network): when preflight_scan's
+ * `auth.loginImplemented` is false (and the app should have sign-in), the host AI
+ * OFFERS to add login, and on the user's yes calls scaffold_auth to get a
+ * ready-to-apply Google OAuth scaffold. The server is pure, so the tool RETURNS
+ * the files/steps and the host AI writes them with its own file tools.
+ *
+ * It tailors the scaffold to the app's framework: "nextjs" (Auth.js / NextAuth
+ * Google provider), "express" (passport-google-oauth20 + express-session), or a
+ * framework-agnostic "generic" set of steps. M8 supports provider "google".
+ */
+export const ScaffoldAuthProviderSchema = z.enum(["google"]);
+export type ScaffoldAuthProvider = z.infer<typeof ScaffoldAuthProviderSchema>;
+
+export const ScaffoldAuthFrameworkSchema = z.enum([
+  "nextjs",
+  "express",
+  "generic",
+]);
+export type ScaffoldAuthFramework = z.infer<typeof ScaffoldAuthFrameworkSchema>;
+
+export const scaffoldAuthInputShape = {
+  /** OAuth provider to scaffold. M8 supports "google" (the default). */
+  provider: ScaffoldAuthProviderSchema.optional(),
+  /**
+   * Target framework. If omitted, it is inferred from `stack` (e.g. a "next"
+   * frontend -> "nextjs", an "express" backend -> "express"), else "generic".
+   */
+  framework: ScaffoldAuthFrameworkSchema.optional(),
+  /** Stack hint from preflight_scan (e.g. stack.frontend / stack.backend) to infer the framework. */
+  stack: z.string().optional(),
+  /** product (public sign-in) vs internal (gate to an allowlist). Defaults to "product". */
+  mode: z.enum(["product", "internal"]).optional(),
+  /** Base URL of the deployed app, used to build the OAuth redirect URI(s). */
+  appUrl: z.string().optional(),
+  /** Internal mode: restrict sign-in to this email domain (e.g. "yourco.com"). */
+  allowedDomain: z.string().optional(),
+} as const;
+export const ScaffoldAuthInputSchema = z.object(scaffoldAuthInputShape);
+export type ScaffoldAuthInput = z.infer<typeof ScaffoldAuthInputSchema>;
+
+/** One file the host AI should create or merge to wire up auth. */
+export const scaffoldFileShape = {
+  path: z.string(),
+  contents: z.string(),
+  /** create = new file; merge = blend into an existing file; modify = manual edit per `note`. */
+  action: z.enum(["create", "merge", "modify"]),
+  note: z.string().optional(),
+} as const;
+export const ScaffoldFileSchema = z.object(scaffoldFileShape);
+export type ScaffoldFile = z.infer<typeof ScaffoldFileSchema>;
+
+/** An env var the scaffold needs (name + example placeholder; never a real value). */
+export const scaffoldEnvVarShape = {
+  key: z.string(),
+  example: z.string(),
+  secret: z.boolean(),
+  note: z.string().optional(),
+} as const;
+export const ScaffoldEnvVarSchema = z.object(scaffoldEnvVarShape);
+export type ScaffoldEnvVar = z.infer<typeof ScaffoldEnvVarSchema>;
+
+export const scaffoldAuthOutputShape = {
+  provider: z.string(),
+  /** The framework the scaffold targets (resolved from input/stack). */
+  framework: ScaffoldAuthFrameworkSchema,
+  /** Packages to install (npm), e.g. ["next-auth"] or ["passport", "passport-google-oauth20", "express-session"]. */
+  dependencies: z.array(z.string()),
+  /** Env vars to set (names + placeholders). The host fills the real values. */
+  envVars: z.array(ScaffoldEnvVarSchema),
+  /** OAuth redirect URI(s) to register in the Google Cloud console. */
+  redirectUris: z.array(z.string()),
+  /** Files to create/merge (contents included) to wire up Google sign-in. */
+  files: z.array(ScaffoldFileSchema),
+  /** Ordered setup steps (create the Google OAuth client, install deps, write files, …). */
+  steps: z.array(z.string()),
+  /** Footguns/warnings (redirect-URI exactness, session secret, internal-mode gating, …). */
+  warnings: z.array(z.string()),
+  summary: z.string(),
+} as const;
+export const ScaffoldAuthOutputSchema = z.object(scaffoldAuthOutputShape);
+export type ScaffoldAuthOutput = z.infer<typeof ScaffoldAuthOutputSchema>;

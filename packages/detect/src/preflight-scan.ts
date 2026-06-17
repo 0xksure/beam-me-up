@@ -39,6 +39,7 @@
  */
 import type {
   AccessControlFinding,
+  AuthAssessment,
   EnvPlan,
   PreflightFile,
   PreflightScanInput,
@@ -47,6 +48,7 @@ import type {
   SecretFinding,
 } from "@beam-me-up/core";
 import { detectAccessControl } from "./access-control.js";
+import { detectAuth } from "./auth-detect.js";
 import { buildEnvPlan, detectSecrets } from "./secrets.js";
 import { deriveSignals } from "./signals.js";
 import { detectBuild, detectServices, detectStack } from "./stack.js";
@@ -64,6 +66,7 @@ export function preflightScan(
   const secrets = detectSecrets(files);
   const envPlan = buildEnvPlan(files, secrets);
   const accessControl = detectAccessControl(files, mode);
+  const auth = detectAuth(files);
   const build = detectBuild(files);
 
   // ---- Cross-cutting fields -------------------------------------------
@@ -71,6 +74,7 @@ export function preflightScan(
     secrets,
     accessControl,
     envPlan,
+    auth,
   );
   const instructions = buildInstructions(
     secrets,
@@ -88,6 +92,7 @@ export function preflightScan(
     secrets,
     envPlan,
     accessControl,
+    auth,
     build,
     securityFollowups,
     instructions,
@@ -148,6 +153,7 @@ function buildSecurityFollowups(
   secrets: SecretFinding[],
   accessControl: AccessControlFinding[],
   envPlan: EnvPlan,
+  auth: AuthAssessment,
 ): string[] {
   const followups: string[] = [];
 
@@ -156,6 +162,13 @@ function buildSecurityFollowups(
     if (secret.severity !== "high") continue;
     followups.push(
       `Rotate and move the hardcoded ${secret.suggestedEnvKey} (${secret.kind}) in ${secret.file}:${secret.line} into an env var.`,
+    );
+  }
+
+  // No login but the app serves requests -> offer to add Google sign-in.
+  if (auth.offerGoogleAuth) {
+    followups.push(
+      "No login/auth detected: offer the user Google sign-in and scaffold it with scaffold_auth { provider: \"google\" }.",
     );
   }
 

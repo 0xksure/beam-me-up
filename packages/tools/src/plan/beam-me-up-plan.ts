@@ -32,6 +32,7 @@ const LIVE_TOOLS = [
   "build_image_plan",
   "preflight_scan",
   "review_code",
+  "scaffold_auth",
   "route_target",
   "validate_compose",
   "write_todo",
@@ -97,12 +98,11 @@ set env vars, deploy, and read build logs are all live MCP tools — \`vercel\`
     a clear error asking you to set it. The two providers differ at \`deploy\`:
     Vercel uploads local \`files\`, DigitalOcean deploys a registry \`image\`
     (see step 10).
-- **COMING SOON** — every step still marked **(coming soon)** below
-  (the auth scaffolder). That tool does **not** exist yet. When you reach a
-  (coming soon) step: do the
-  **manual fallback** described in that step using your own [HOST-AI] tools,
-  tell the user it is not yet automated, and continue. Do **not** attempt to
-  call a (coming soon) MCP tool — it will fail.
+  - \`scaffold_auth\` is **live** — when \`preflight_scan\`'s \`auth\` shows the app
+    has no login, it generates a ready-to-apply **Google sign-in** scaffold
+    (step 14). Like the other pure tools it returns files/steps; you write them.
+- **Every step in this plan is backed by a real tool** — there are no
+  "coming soon" placeholders left to fall back from.
 
 ---
 
@@ -147,6 +147,10 @@ the repo:
   (e.g. \`.env\`), and \`replacements\` (swap each inline literal for the env reference).
 - \`accessControl\` — heuristic security-posture findings (CORS wildcard, missing
   auth, debug enabled, missing allowlist for internal mode, …).
+- \`auth\` — a positive login read: \`loginImplemented\`, the detected
+  \`mechanisms\`/\`providers\`, a \`confidence\`, the \`signals\` behind it, and
+  \`offerGoogleAuth\`. When \`offerGoogleAuth\` is true (no login but the app serves
+  requests), **offer the user Google sign-in in step 14**.
 - \`build\` — the detected install/build/test/start commands + ordered
   \`instructions\` to verify the app builds and runs **before** deploying.
 - \`securityFollowups\` + \`instructions\` + \`summary\` — feed \`securityFollowups\`
@@ -334,14 +338,23 @@ those are protected. (If you later switch to an internal/team-only app, you must
 set \`ALLOWED_EMAILS\`/\`ALLOWED_DOMAIN\` and lock the allowlist.)`
 }
 
-### 14. Auth scaffold — **(coming soon)**
-Will scaffold OAuth sign-in (Google/GitHub), wire callbacks, and add session/
-middleware protection.
-- **Not available in M0.** Manual fallback ([HOST-AI] + user): if \`authNeeded\`,
-  use the **Manual setup** section of the generated TODO.md — register the OAuth
-  app(s), set the redirect URI to \`<liveUrl>/api/auth/callback/<provider>\`, and
-  paste \`CLIENT_ID\`/\`CLIENT_SECRET\` into the env vars. Implement the sign-in
-  scaffolding with your own code tools.
+### 14. [MCP-TOOL: scaffold_auth] Offer + scaffold Google sign-in — **LIVE**
+If \`preflight_scan\`'s \`auth.loginImplemented\` is \`false\` and the app should have
+sign-in (\`auth.offerGoogleAuth\` is true, or the user wants login):
+- **[CONFIRM] offer it first:** tell the user the app has no login and ask if they
+  want **Google sign-in** added. Only proceed on a yes.
+- Call **\`scaffold_auth\`** with \`{ provider: "google", framework, stack?, mode: "${mode}", appUrl?, allowedDomain? }\`.
+  \`framework\` is \`"nextjs"\` | \`"express"\` | \`"generic"\` (pass it, or pass the
+  \`stack\` hint and let it infer). \`appUrl\` = the live URL (for the redirect URI);
+  \`allowedDomain\` gates sign-in to a domain in \`internal\` mode.
+- It returns \`{ dependencies, envVars, redirectUris, files, steps, warnings }\`.
+  [HOST-AI] **write the \`files\` yourself** (action \`create\`/\`merge\`), install
+  \`dependencies\`, register the \`redirectUris\` in the Google console, and set the
+  \`envVars\` (use \`set_env_vars\` for the deployed app). **[CONFIRM]** the auth
+  changes with the user before applying — this adds dependencies and routes.
+- If login already exists (\`auth.loginImplemented\` true), skip scaffolding; just
+  verify the existing auth is applied to protected routes and (internal mode)
+  gated to the allowlist.
 
 ### 15. [CONFIRM] Present the ship checklist
 Show the user the **Ship checklist** from \`write_todo\` (rendered as markdown
@@ -368,12 +381,11 @@ ${
 
 **Reminder:** for all repository reading, file writing, shell, and git actions,
 use your OWN host tools ([HOST-AI]). The analysis/decision/generation tools
-(\`preflight_scan\`, \`route_target\`, \`validate_compose\`, \`write_todo\`) are pure
-and touch nothing.
+(\`preflight_scan\`, \`review_code\`, \`scaffold_auth\`, \`route_target\`,
+\`validate_compose\`, \`write_todo\`) are pure and touch nothing — they return
+findings/files/text and you apply them.
 The deploy tools (\`create_deploy_target\`, \`set_env_vars\`, \`deploy\`,
 \`get_deploy_logs\`) DO make real calls to the provider API — Vercel using
 \`VERCEL_TOKEN\`, or DigitalOcean App Platform using \`DIGITALOCEAN_TOKEN\`.
-Everything marked **(coming soon)** must be done manually until a later
-milestone lands.
 `;
 }

@@ -27,6 +27,8 @@ import {
   preflightScanOutputShape,
   reviewCodeInputShape,
   reviewCodeOutputShape,
+  scaffoldAuthInputShape,
+  scaffoldAuthOutputShape,
   createDeployTargetInputShape,
   createDeployTargetOutputShape,
   setEnvVarsInputShape,
@@ -46,6 +48,7 @@ import { validateCompose } from "@beam-me-up/tools";
 import { writeTodo } from "@beam-me-up/tools";
 import { preflightScan } from "@beam-me-up/detect";
 import { reviewCode } from "@beam-me-up/detect";
+import { scaffoldAuth } from "@beam-me-up/tools";
 import {
   createDeployTarget,
   setEnvVarsTool,
@@ -266,6 +269,31 @@ export function createServer(): McpServer {
     },
     (args) => {
       const result = reviewCode(args);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    },
+  );
+
+  /* ---- tool: scaffold_auth (M8) --------------------------------- */
+  server.registerTool(
+    "scaffold_auth",
+    {
+      title: "Scaffold Google sign-in",
+      description:
+        "Pure: when an app has no login (see preflight_scan's `auth`), generate a " +
+        "ready-to-apply Google sign-in scaffold. Tailors to the framework — " +
+        "\"nextjs\" (Auth.js/NextAuth), \"express\" (passport-google-oauth20 + " +
+        "express-session), or \"generic\" steps. Returns dependencies, env vars, " +
+        "the OAuth redirect URIs to register, files (with contents) to create/" +
+        "merge, and ordered steps. It does NOT write files — apply them yourself " +
+        "after the user confirms. mode \"internal\" adds an email-domain allowlist.",
+      inputSchema: scaffoldAuthInputShape,
+      outputSchema: scaffoldAuthOutputShape,
+    },
+    (args) => {
+      const result = scaffoldAuth(args);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         structuredContent: result,

@@ -3,7 +3,7 @@
  * Cursor:
  *
  *   claude mcp add beam-me-up -- npx tsx \
- *     /Users/Kristoffer.Berg/github/beam-me-up/src/server/stdio.ts
+ *     /ABSOLUTE/PATH/TO/beam-me-up/packages/server/src/server/stdio.ts
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
