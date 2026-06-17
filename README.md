@@ -109,10 +109,14 @@ npm run dev:http         # tsx packages/server/src/server/http.ts  (PORT default
 npm run start:http       # node packages/server/dist/server/http.js
 ```
 
-The HTTP server listens on `http://localhost:3000/mcp`. By default it runs with
-**no auth** (localhost dev). To make it **safe off-localhost, configure OAuth**
-(M5): set `OAUTH_ISSUER` + `OAUTH_AUDIENCE` + a key and every `/mcp` request must
-carry a verified bearer token. See
+The HTTP server binds **`127.0.0.1:3000`** by default (loopback only) and serves
+`/mcp`. To expose it, set `BEAM_HTTP_HOST` (e.g. `0.0.0.0`) — but it then
+**refuses to start without OAuth** unless you set `BEAM_HTTP_ALLOW_INSECURE=1`.
+To run it **safely off-localhost, configure OAuth** (M5): set `OAUTH_ISSUER` +
+`OAUTH_AUDIENCE` + a key and every `/mcp` request must carry a verified bearer
+token. The `/mcp` endpoint also validates the `Host`/`Origin` headers
+(DNS-rebinding protection; allowlist extra hosts via `BEAM_HTTP_ALLOWED_HOSTS` /
+`BEAM_HTTP_ALLOWED_ORIGINS`). See
 [OAuth on the HTTP transport (M5)](#oauth-on-the-http-transport-m5) below.
 
 ## Other scripts
@@ -127,25 +131,35 @@ npm run test:m3          # tsx test/m3.test.ts (M3 preflight_scan tests, pure / 
 npm run test:m4          # tsx test/m4.test.ts (M4 DigitalOcean deploy tests, mocked DO API)
 npm run test:m5          # tsx test/m5.test.ts (M5 OAuth HTTP tests, pure crypto + ephemeral-port HTTP)
 npm run test:m7          # tsx test/m7.test.ts (review_code vulnerability-review tests, pure)
+npm run test:m8          # tsx test/m8.test.ts (M8 login detection + scaffold_auth + HTTP hardening)
 ```
 
 ---
 
 ## Connect to Claude Code
 
-### stdio
+There are two ways to consume Beam Me Up: **download it** and run it as a local
+stdio MCP, or call the **MCP API** (the Streamable HTTP transport).
+
+### stdio (download it)
+
+Point the command at your local clone (use the absolute path to *your* checkout):
 
 ```bash
-claude mcp add beam-me-up -- npx tsx /Users/Kristoffer.Berg/github/beam-me-up/packages/server/src/server/stdio.ts
+claude mcp add beam-me-up -- npx tsx /ABSOLUTE/PATH/TO/beam-me-up/packages/server/src/server/stdio.ts
 ```
 
-### Streamable HTTP
+### Streamable HTTP (the MCP API)
 
 Start the HTTP server first (`npm run dev:http`), then:
 
 ```bash
 claude mcp add --transport http beam-me-up-http http://localhost:3000/mcp
 ```
+
+The HTTP server is loopback-only and unauthenticated by default; to share it as a
+real API, bind a host and configure OAuth (see
+[OAuth on the HTTP transport (M5)](#oauth-on-the-http-transport-m5)).
 
 Once connected, invoke the `beam_me_up` prompt and let the host AI follow the
 plan, calling `route_target`, `validate_compose`, and `write_todo` as it goes.
@@ -466,6 +480,37 @@ npm run test:m5          # tsx test/m5.test.ts — pure crypto + an ephemeral-po
 
 ---
 
+## Auth audit + Google sign-in (M8)
+
+M8 makes the **login** part of "review for security" real and adds one new tool.
+
+- **Inline password / client-secret check.** `preflight_scan`'s secret detection
+  now also flags **OAuth client secrets** (Google's `GOCSPX-…`) alongside passwords
+  and provider keys — masked, with a `.env` migration plan as before.
+- **Login detection.** `preflight_scan` returns a positive `auth` assessment:
+  `loginImplemented`, the detected `mechanisms` (NextAuth/Auth.js, Passport,
+  express-session, Lucia, Clerk, Supabase Auth, Firebase, Flask-Login, …) and
+  `providers` (google/github/…), a `confidence`, the `signals` behind the verdict,
+  and `offerGoogleAuth`. It is a heuristic — it reports what it can see, not a full
+  auth audit.
+- **Offer + scaffold Google sign-in.** When no login is found but the app serves
+  requests, the plan tells the host AI to **offer** the user Google sign-in; on a
+  yes it calls the new **`scaffold_auth`** tool. `scaffold_auth` is pure — it
+  returns the `dependencies`, `envVars`, OAuth `redirectUris`, and `files` (with
+  contents) to create/merge, tailored to **Next.js** (Auth.js), **Express**
+  (passport-google-oauth20 + express-session), or a **generic** fallback; the host
+  AI writes the files. `mode: "internal"` adds an email-domain allowlist gate.
+- **Hardened HTTP transport** (so the "MCP API" is safe to expose): binds
+  `127.0.0.1` by default, **refuses to start no-auth on a non-loopback host**
+  (unless `BEAM_HTTP_ALLOW_INSECURE=1`), and validates `Host`/`Origin`
+  (DNS-rebinding protection).
+
+```bash
+npm run test:m8          # tsx test/m8.test.ts — login detection + scaffold_auth + HTTP hardening, pure
+```
+
+---
+
 ## Project layout
 
 M6 split the codebase into an **npm-workspaces monorepo** under `packages/*`.
@@ -490,8 +535,9 @@ packages/
     src/secrets.ts           # M3: detectSecrets + buildEnvPlan (masked findings + .env plan)
     src/stack.ts             # M3: detectStack / detectServices / detectBuild
     src/access-control.ts    # M3: detectAccessControl(files, mode)
+    src/auth-detect.ts       # M8: detectAuth(files) -> login/auth assessment (positive)
     src/route-target.ts      # routeTarget(input) -> RouteTargetOutput
-    src/preflight-scan.ts    # M3: preflightScan(input) (composes the detectors)
+    src/preflight-scan.ts    # M3: preflightScan(input) (composes the detectors, incl. auth)
     src/review.ts            # reviewCode(input) -> heuristic vulnerability findings + fixes
   templates/   @beam-me-up/templates   (deps: core, yaml)
     src/compose.ts           # generateCompose(services) -> docker-compose yaml
@@ -508,13 +554,14 @@ packages/
     src/build-image-plan.ts  # buildImagePlan() -> exact docker build/push recipe + prereqs + amd64 warning
     src/validate-compose.ts  # validateCompose(input)
     src/write-todo.ts        # writeTodo(input)
+    src/scaffold-auth.ts     # M8: scaffoldAuth(input) -> Google sign-in scaffold (nextjs/express/generic)
     src/deploy-tools.ts      # M1/M4: create_deploy_target / set_env_vars / deploy / get_deploy_logs
     src/db-tools.ts          # M2: provisionDatabaseTool
     src/plan/beam-me-up-plan.ts # renderBeamMeUpPlan(args) -> orchestration plan (markdown)
   server/      @beam-me-up/server      (deps: core, detect, tools, @modelcontextprotocol/sdk)
-    src/mcp/server.ts        # createServer(): McpServer — registers the prompt + 12 tools
+    src/mcp/server.ts        # createServer(): McpServer — registers the prompt + 13 tools
     src/server/stdio.ts      # stdio entrypoint (bin)
-    src/server/http.ts       # Streamable HTTP entrypoint (createBeamHttpServer; OAuth when OAUTH_* set)
+    src/server/http.ts       # Streamable HTTP (createBeamHttpServer; loopback default, OAuth + Host/Origin guard)
     src/auth/oauth/*         # M5: config / jwt / verifier / metadata / guard
     src/smoke-test.ts        # M0 in-memory MCP client test
 test/                        # top-level suites importing the package barrels (@beam-me-up/*)
@@ -523,6 +570,8 @@ test/                        # top-level suites importing the package barrels (@
   m3.test.ts                           # M3 (pure)
   m4.test.ts + digitalocean-mock.ts    # M4 (mocked DO API)
   m5.test.ts                           # M5 (pure crypto + ephemeral-port HTTP)
+  m7.test.ts                           # M7 (review_code, pure)
+  m8.test.ts                           # M8 (login detection + scaffold_auth + HTTP hardening, pure)
 ```
 
 `route_target` + `preflight_scan` live in **detect** (not tools): they are pure
@@ -558,3 +607,5 @@ package `dist/`.
 | **M4** *(done)* | **DigitalOcean** deploys — `provider: "digitalocean"` on the same four deploy tools, behind the same `DeployTarget` adapter. App Platform container-image deploys (DOCR / Docker Hub / GHCR); image + env vars live in one app spec; idempotent create (redeploy by name); logs via the deployment's presigned URLs. Token via `DIGITALOCEAN_TOKEN`. Fully-mocked offline test suite (`npm run test:m4`). |
 | **M5** *(done)* | **OAuth on the Streamable HTTP transport** — RFC 9728 protected-resource metadata + bearer-token verification (JWT, HS256/RS256 via `node:crypto`, alg-confusion guarded) with 401/403 + `WWW-Authenticate`, env-gated (`OAUTH_*`); unconfigured = no-auth localhost. Pure + ephemeral-port HTTP test suite (`npm run test:m5`). _(JWKS-URL fetch + a full embedded Authorization Server are possible later add-ons.)_ |
 | **M6** *(done)* | **Monorepo split** — npm workspaces under `packages/*`: `@beam-me-up/core` (schemas), `detect` (incl. `route_target` + `preflight_scan`), `templates`, `adapters`, `tools`, `server`. Clean acyclic dependency graph, per-package barrels, project-references build (`tsc -b`), tests run off source via `tsx`. _(The live end-to-end "beam me up" run against real providers needs your tokens, so it stays a manual step.)_ |
+| **M7** *(done)* | **Code review** — `review_code` (pure, heuristic): prioritised vulnerability findings (XSS, SQL/command injection, info-disclosure, disabled TLS, missing auth/headers/rate-limit, eval, weak crypto, open redirect) each with a fix. Pure offline test suite (`npm run test:m7`). |
+| **M8** *(done)* | **Auth audit + Google sign-in** — `preflight_scan` gains inline client-secret detection (`GOCSPX-…`) and a positive `auth` login assessment; new pure **`scaffold_auth`** tool offers + generates a Google sign-in scaffold (Next.js/Express/generic, optional internal-mode allowlist). HTTP transport hardened (loopback default, refuse-insecure, Host/Origin guard) so the **MCP API** is safe to expose. Pure offline test suite (`npm run test:m8`). |

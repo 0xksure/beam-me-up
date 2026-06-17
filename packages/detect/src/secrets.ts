@@ -15,7 +15,8 @@
  *   - high:   private keys ("-----BEGIN ... PRIVATE KEY-----"); cloud keys
  *             (AWS "AKIA"+16, "aws_secret_access_key=..."); provider live keys
  *             (Stripe "sk_live_"/"rk_live_", GitHub "ghp_"/"gho_", Slack "xox[bap]-",
- *             Google "AIza", OpenAI "sk-"+long, Twilio "SK"+32); connection
+ *             Google API "AIza", Google OAuth client secret "GOCSPX-",
+ *             OpenAI "sk-"+long, Twilio "SK"+32); connection
  *             strings with inline credentials
  *             (postgres://user:pass@host, mongodb+srv://user:pass@, redis://:pass@,
  *             mysql://user:pass@, amqps://user:pass@); JWTs ("eyJ"... .. ..).
@@ -243,6 +244,15 @@ const TAGGED_DETECTORS: TaggedDetector[] = [
     re: /\bAIza[0-9A-Za-z_-]{35}\b/,
     severity: "high",
     envKey: () => "GOOGLE_API_KEY",
+  },
+  // Google OAuth *client secret* (the credential behind "Sign in with Google").
+  // New-format secrets are prefixed "GOCSPX-"; flagging the prefix catches it
+  // even inside a downloaded client_secret_*.json or a `clientSecret:` literal.
+  {
+    kind: "google-oauth-client-secret",
+    re: /\bGOCSPX-[0-9A-Za-z_-]{20,}\b/,
+    severity: "high",
+    envKey: () => "GOOGLE_CLIENT_SECRET",
   },
   {
     kind: "twilio-key",
