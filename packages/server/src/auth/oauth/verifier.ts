@@ -16,7 +16,8 @@
  */
 import type { OAuthConfig } from "./config.js";
 import type { JwtClaims } from "./jwt.js";
-import { verifyJwt, JwtError } from "./jwt.js";
+import { verifyJwt, decodeJwtHeader, JwtError } from "./jwt.js";
+import { createJwksResolver, JwksError, type JwksResolver } from "./jwks.js";
 
 export type AuthInfo = {
   subject?: string;
@@ -84,21 +85,52 @@ function extractScopes(claims: JwtClaims): string[] {
  * details never leak past this boundary. After a valid token is decoded, the
  * configured `requiredScopes` are enforced — a missing scope yields
  * AuthError("insufficient_scope", 403). The raw token is never logged.
+ *
+ * When the config has a `jwksUri` (RS256 via a managed Authorization Server),
+ * the RS256 public key is resolved by the token's header `kid` from the JWKS
+ * endpoint (rotating keys) instead of a static PEM. The algorithm stays pinned
+ * to RS256 — key SELECTION by `kid` never weakens verifyJwt's alg-confusion
+ * guard. A JWKS resolution failure maps to AuthError("invalid_token", 401), so
+ * the server never fails open. `deps.jwksResolver` is injectable for tests.
  */
-export function createJwtVerifier(config: OAuthConfig): TokenVerifier {
+export function createJwtVerifier(
+  config: OAuthConfig,
+  deps?: { jwksResolver?: JwksResolver },
+): TokenVerifier {
+  const useJwks =
+    config.alg === "RS256" &&
+    typeof config.jwksUri === "string" &&
+    config.jwksUri.length > 0;
+  const jwksResolver: JwksResolver | undefined = useJwks
+    ? (deps?.jwksResolver ??
+      createJwksResolver({ jwksUri: config.jwksUri as string, issuer: config.issuer }))
+    : undefined;
+
   return {
     async verify(token: string): Promise<AuthInfo> {
       let claims: JwtClaims;
       try {
-        claims = verifyJwt(token, {
-          alg: config.alg,
-          secret: config.secret,
-          publicKeyPem: config.publicKeyPem,
-          issuer: config.issuer,
-          audience: config.audience,
-        });
+        if (jwksResolver) {
+          const header = decodeJwtHeader(token);
+          const kid = typeof header.kid === "string" ? header.kid : undefined;
+          const publicKeyPem = await jwksResolver.getPublicKeyPem(kid);
+          claims = verifyJwt(token, {
+            alg: "RS256",
+            publicKeyPem,
+            issuer: config.issuer,
+            audience: config.audience,
+          });
+        } else {
+          claims = verifyJwt(token, {
+            alg: config.alg,
+            secret: config.secret,
+            publicKeyPem: config.publicKeyPem,
+            issuer: config.issuer,
+            audience: config.audience,
+          });
+        }
       } catch (err) {
-        if (err instanceof JwtError) {
+        if (err instanceof JwtError || err instanceof JwksError) {
           throw new AuthError("invalid_token", err.message);
         }
         throw err;

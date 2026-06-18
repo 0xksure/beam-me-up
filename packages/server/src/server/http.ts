@@ -135,6 +135,14 @@ export function createBeamHttpServer(): Server {
   return createHttpServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
 
+    // Liveness/readiness probe for a load balancer or orchestrator. Unauthenticated
+    // and exempt from the Host/Origin guard (health checks use arbitrary Hosts).
+    if (req.method === "GET" && url.pathname === "/healthz") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+
     // OAuth protected-resource metadata (RFC 9728), only when auth is enabled.
     if (guard && req.method === "GET" && url.pathname === guard.metadataPath) {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -219,7 +227,7 @@ export function startBeamHttpServer(port: number = PORT, host: string = HOST): S
     const msg =
       `[beam-me-up] REFUSING to start: binding ${host}:${port} exposes the MCP ` +
       `API on a non-loopback interface with NO authentication. Configure OAuth ` +
-      `(OAUTH_ISSUER + OAUTH_AUDIENCE + OAUTH_JWT_SECRET|OAUTH_JWT_PUBLIC_KEY), ` +
+      `(OAUTH_ISSUER + OAUTH_AUDIENCE + OAUTH_JWT_SECRET|OAUTH_JWT_PUBLIC_KEY|OAUTH_JWKS_URI), ` +
       `bind to 127.0.0.1 (unset BEAM_HTTP_HOST), or set BEAM_HTTP_ALLOW_INSECURE=1 ` +
       `if this is a trusted private network.\n`;
     process.stderr.write(msg);

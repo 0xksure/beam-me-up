@@ -96,6 +96,26 @@ function decodeJsonSegment(segment: string): Record<string, unknown> {
 }
 
 /**
+ * Decode ONLY the protected header of a compact JWS, without verifying anything.
+ *
+ * This is used to read the unauthenticated `kid` (key id) so a JWKS resolver can
+ * pick WHICH public key to hand to verifyJwt(). It deliberately does NOT trust
+ * anything in the header for security decisions — the algorithm is still pinned
+ * by verifyJwt()'s alg-confusion guard, and the signature is still checked there.
+ * A malformed token surfaces as JwtError("malformed").
+ */
+export function decodeJwtHeader(token: string): Record<string, unknown> {
+  if (typeof token !== "string" || token.length === 0) {
+    throw new JwtError("malformed", "JWT is empty");
+  }
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts[0] === undefined || parts[0].length === 0) {
+    throw new JwtError("malformed", "JWT must have three parts");
+  }
+  return decodeJsonSegment(parts[0]);
+}
+
+/**
  * Verify a compact JWS access token and return its decoded claims.
  *
  * Security properties enforced here (see the file-level doc-comment):

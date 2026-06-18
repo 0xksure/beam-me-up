@@ -50,6 +50,7 @@ import {
 import { resolveOAuthGuard } from "@beam-me-up/server";
 import { getOAuthConfig, type OAuthConfig } from "@beam-me-up/server";
 import { createBeamHttpServer } from "@beam-me-up/server";
+import { createJwksResolver, type JwksFetch } from "@beam-me-up/server";
 
 /* ------------------------------------------------------------------ */
 /* Tiny assertion harness with PASS/FAIL printing                      */
@@ -77,6 +78,31 @@ function jwtErrorCode(fn: () => unknown): string | undefined {
     return `<non-JwtError: ${String(err)}>`;
   }
   return undefined;
+}
+
+/**
+ * Await an async fn expected to throw an AuthError, and assert its code+status.
+ */
+async function assertAuthError(
+  fn: () => Promise<unknown>,
+  code: string,
+  status: number,
+  msg: string,
+): Promise<void> {
+  let e: AuthError | undefined;
+  try {
+    await fn();
+  } catch (err) {
+    if (err instanceof AuthError) e = err;
+    else {
+      check(false, `${msg} (threw non-AuthError: ${String(err)})`);
+      return;
+    }
+  }
+  check(
+    e !== undefined && e.code === code && e.status === status,
+    `${msg} (got ${e ? `${e.code}/${e.status}` : "<no throw>"})`,
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -185,6 +211,7 @@ const OAUTH_ENV_KEYS = [
   "OAUTH_JWT_SECRET",
   "OAUTH_JWT_PUBLIC_KEY",
   "OAUTH_JWT_ALG",
+  "OAUTH_JWKS_URI",
   "OAUTH_RESOURCE_URL",
   "OAUTH_REQUIRED_SCOPES",
   "PORT",
@@ -448,6 +475,224 @@ async function testMetadataAndVerifier(): Promise<void> {
 }
 
 /* ================================================================== */
+/* [jwks] RS256 verification via a rotating JWKS endpoint (by kid)      */
+/* ================================================================== */
+
+/** Export a public-key PEM as a JWK with a kid (what an AS publishes). */
+function jwkOf(publicKeyPem: string, kid: string): Record<string, unknown> {
+  const jwk = crypto
+    .createPublicKey(publicKeyPem)
+    .export({ format: "jwk" }) as Record<string, unknown>;
+  return { ...jwk, kid, alg: "RS256", use: "sig" };
+}
+
+/** A stub JWKS fetch that counts calls and returns a fixed document. */
+function makeJwksFetch(
+  doc: { keys: unknown[] },
+  counter: { n: number },
+): JwksFetch {
+  return async () => {
+    counter.n += 1;
+    return { ok: true, status: 200, json: async () => doc };
+  };
+}
+
+async function testJwks(): Promise<void> {
+  process.stdout.write("\n[jwks] RS256 verification via a JWKS endpoint (by kid)\n");
+
+  /* ---- env: OAUTH_JWKS_URI (no secret/PEM) -> enabled RS256 config ---- */
+  const saved = snapshotEnv();
+  try {
+    clearOAuthEnv();
+    process.env.OAUTH_ISSUER = ISSUER;
+    process.env.OAUTH_AUDIENCE = AUDIENCE;
+    process.env.OAUTH_JWKS_URI = "https://auth.example.com/oauth2/jwks";
+    const cfg = getOAuthConfig();
+    check(
+      cfg !== null &&
+        cfg.alg === "RS256" &&
+        cfg.jwksUri === "https://auth.example.com/oauth2/jwks" &&
+        cfg.secret === undefined,
+      `env OAUTH_JWKS_URI (no secret/PEM) -> enabled RS256 config w/ jwksUri (got ${cfg ? `${cfg.alg}/${String(cfg.jwksUri)}` : "null"})`,
+    );
+    if (cfg !== null) {
+      const md = buildProtectedResourceMetadata(cfg);
+      check(
+        md.authorization_servers[0] === ISSUER,
+        `metadata.authorization_servers[0] byte-for-byte === issuer (got ${JSON.stringify(md.authorization_servers[0])})`,
+      );
+    }
+  } finally {
+    restoreEnv(saved);
+  }
+
+  /* ---- resolver + verifier against an injected JWKS endpoint ---------- */
+  const kp = genRsa();
+  const KID = "test-key-1";
+  const jwks = { keys: [jwkOf(kp.publicKey, KID)] };
+  const counter = { n: 0 };
+  let clockMs = NOW * 1000;
+  const resolver = createJwksResolver({
+    jwksUri: "https://auth.example.com/oauth2/jwks",
+    issuer: ISSUER,
+    fetchImpl: makeJwksFetch(jwks, counter),
+    now: () => clockMs,
+    cooldownMs: 30_000,
+    ttlMs: 600_000,
+  });
+  const jwksConfig = buildConfig({
+    alg: "RS256",
+    secret: undefined,
+    publicKeyPem: undefined,
+    jwksUri: "https://auth.example.com/oauth2/jwks",
+  });
+  const verifier = createJwtVerifier(jwksConfig, { jwksResolver: resolver });
+
+  const realNow = Math.floor(Date.now() / 1000);
+  const mkRs = (
+    over: Record<string, unknown> = {},
+    header: Record<string, unknown> = {},
+  ): string =>
+    mintToken({
+      header: { alg: "RS256", typ: "JWT", kid: KID, ...header },
+      payload: basePayload({ iat: realNow, exp: realNow + 3600, ...over }),
+      sign: { kind: "rs256", privateKey: kp.privateKey },
+    });
+
+  /* valid RS256 resolved by kid -> subject; exactly one fetch */
+  const ok = await verifier.verify(mkRs());
+  check(ok.subject === "user-1", `JWKS valid RS256 (kid=${KID}) -> subject "user-1" (got "${ok.subject}")`);
+  check(counter.n === 1, `JWKS fetched the key set once for the first verify (got ${counter.n})`);
+
+  /* second verify reuses the cache (no extra fetch) */
+  await verifier.verify(mkRs());
+  check(counter.n === 1, `JWKS cached key reused on a second verify, still 1 fetch (got ${counter.n})`);
+
+  /* wrong iss / wrong aud / expired -> invalid_token 401 (never fail open) */
+  await assertAuthError(() => verifier.verify(mkRs({ iss: "https://evil.example.com" })), "invalid_token", 401, "JWKS wrong issuer -> invalid_token 401");
+  await assertAuthError(() => verifier.verify(mkRs({ aud: "some-other-resource" })), "invalid_token", 401, "JWKS wrong audience -> invalid_token 401");
+  await assertAuthError(() => verifier.verify(mkRs({ iat: realNow - 7200, exp: realNow - 3600 })), "invalid_token", 401, "JWKS expired token -> invalid_token 401");
+
+  /* alg-confusion still rejected THROUGH the JWKS path */
+  const algLie = mintToken({
+    header: { alg: "HS256", typ: "JWT", kid: KID },
+    payload: basePayload({ iat: realNow, exp: realNow + 3600 }),
+    sign: { kind: "hs256", secret: HS256_SECRET },
+  });
+  await assertAuthError(() => verifier.verify(algLie), "invalid_token", 401, 'JWKS header alg "HS256" while RS256 expected -> invalid_token (alg-confusion guard holds)');
+  const algNone = mintToken({
+    header: { alg: "none", typ: "JWT", kid: KID },
+    payload: basePayload({ iat: realNow, exp: realNow + 3600 }),
+    sign: { kind: "none" },
+  });
+  await assertAuthError(() => verifier.verify(algNone), "invalid_token", 401, 'JWKS header alg "none" -> invalid_token (rejected)');
+
+  /* unknown kid: bounded refresh. Within cooldown of the last fetch, NO refetch. */
+  const fetchesBefore = counter.n;
+  await assertAuthError(() => verifier.verify(mkRs({}, { kid: "rotated-2" })), "invalid_token", 401, "JWKS unknown kid -> invalid_token 401");
+  check(counter.n === fetchesBefore, `JWKS unknown kid within cooldown does NOT refetch (bounded) (got +${counter.n - fetchesBefore})`);
+
+  /* after the cooldown elapses, an unknown kid is allowed exactly ONE refresh */
+  clockMs += 31_000;
+  await assertAuthError(() => verifier.verify(mkRs({}, { kid: "rotated-2" })), "invalid_token", 401, "JWKS unknown kid after cooldown -> invalid_token 401");
+  check(counter.n === fetchesBefore + 1, `JWKS unknown kid after cooldown triggers exactly one refresh (got +${counter.n - fetchesBefore})`);
+
+  /* immediately again -> still bounded (no further fetch this cooldown) */
+  await assertAuthError(() => verifier.verify(mkRs({}, { kid: "rotated-2" })), "invalid_token", 401, "JWKS repeated unknown kid -> invalid_token 401");
+  check(counter.n === fetchesBefore + 1, `JWKS repeated unknown kid stays bounded to one refresh per cooldown (got +${counter.n - fetchesBefore})`);
+
+  /* the KNOWN kid still verifies after all the rotation churn */
+  const stillOk = await verifier.verify(mkRs());
+  check(stillOk.subject === "user-1", `JWKS known kid still verifies after refreshes (got "${stillOk.subject}")`);
+
+  /* https-only construction guard */
+  let ctorErr = false;
+  try {
+    createJwksResolver({ jwksUri: "http://auth.example.com/jwks", issuer: ISSUER });
+  } catch {
+    ctorErr = true;
+  }
+  check(ctorErr, "JWKS resolver refuses a non-https (and non-loopback) JWKS URI");
+}
+
+/* ================================================================== */
+/* [jwks] failure-path rate limiting + stale-on-error                  */
+/* ================================================================== */
+
+type FetchMode =
+  | { ok: true; body: { keys: unknown[] } }
+  | { ok: false };
+
+/** A JWKS fetch whose behavior (success/failure/body) is switchable mid-test. */
+function makeSwitchableFetch(state: { mode: FetchMode; n: number }): JwksFetch {
+  return async () => {
+    state.n += 1;
+    if (!state.mode.ok) return { ok: false, status: 503, json: async () => ({}) };
+    const body = state.mode.body;
+    return { ok: true, status: 200, json: async () => body };
+  };
+}
+
+async function testJwksFailureModes(): Promise<void> {
+  process.stdout.write("\n[jwks] failure-path rate limiting + stale-on-error\n");
+
+  const kp = genRsa();
+  const KID = "k1";
+  const state = { mode: { ok: true, body: { keys: [jwkOf(kp.publicKey, KID)] } } as FetchMode, n: 0 };
+  let clk = NOW * 1000;
+  const resolver = createJwksResolver({
+    jwksUri: "https://auth.example.com/oauth2/jwks",
+    issuer: ISSUER,
+    fetchImpl: makeSwitchableFetch(state),
+    now: () => clk,
+    cooldownMs: 30_000,
+    ttlMs: 600_000,
+  });
+  const cfg = buildConfig({
+    alg: "RS256",
+    secret: undefined,
+    publicKeyPem: undefined,
+    jwksUri: "https://auth.example.com/oauth2/jwks",
+  });
+  const verifier = createJwtVerifier(cfg, { jwksResolver: resolver });
+  const realNow = Math.floor(Date.now() / 1000);
+  const tok = (header: Record<string, unknown> = {}): string =>
+    mintToken({
+      header: { alg: "RS256", typ: "JWT", kid: KID, ...header },
+      payload: basePayload({ iat: realNow, exp: realNow + 3600 }),
+      sign: { kind: "rs256", privateKey: kp.privateKey },
+    });
+
+  /* prime the cache from a healthy AS */
+  await verifier.verify(tok());
+  // Read the count through a boolean local so the `asserts` helper doesn't pin
+  // state.n to a literal type (it mutates at runtime via the fetch closure).
+  const primedFetches: number = state.n;
+  check(primedFetches === 1, `failure-modes: primed cache with 1 fetch (got ${primedFetches})`);
+
+  /* AS now FAILING (503). An unknown-kid flood must be bounded to ONE fetch
+     per cooldown EVEN on the failure path (the key bug the review caught). */
+  state.mode = { ok: false };
+  clk += 31_000; // allow exactly one attempt
+  await assertAuthError(() => verifier.verify(tok({ kid: "x1" })), "invalid_token", 401, "failure-modes: unknown kid while AS failing -> 401");
+  await assertAuthError(() => verifier.verify(tok({ kid: "x2" })), "invalid_token", 401, "failure-modes: 2nd unknown kid, same window -> 401");
+  await assertAuthError(() => verifier.verify(tok({ kid: "x3" })), "invalid_token", 401, "failure-modes: 3rd unknown kid, same window -> 401");
+  const boundedFetches: number = state.n;
+  check(boundedFetches === 2, `failure-modes: unknown-kid flood bounded to ONE fetch per cooldown even while AS fails (got ${boundedFetches - 1} extra)`);
+
+  /* stale-on-error: the KNOWN key still verifies from the retained cache */
+  const okStale = await verifier.verify(tok());
+  check(okStale.subject === "user-1", `failure-modes: stale-on-error keeps serving the known key while AS is down (got "${okStale.subject}")`);
+
+  /* an empty-but-200 JWKS must NOT wipe the good cache (treated as failure) */
+  state.mode = { ok: true, body: { keys: [] } };
+  clk += 31_000;
+  await assertAuthError(() => verifier.verify(tok({ kid: "y1" })), "invalid_token", 401, "failure-modes: empty JWKS, unknown kid -> 401");
+  const okAfterEmpty = await verifier.verify(tok());
+  check(okAfterEmpty.subject === "user-1", `failure-modes: an empty JWKS did NOT wipe the good cache (got "${okAfterEmpty.subject}")`);
+}
+
+/* ================================================================== */
 /* [guard] resolveOAuthGuard().authorize(...)                          */
 /* ================================================================== */
 
@@ -522,6 +767,15 @@ async function testHttpWithAuth(): Promise<void> {
   try {
     const port = await listenEphemeral(server);
     const base = `http://127.0.0.1:${port}`;
+
+    /* ---- GET /healthz -> 200 {status:"ok"} even with OAuth ON ----- */
+    const health = await fetch(`${base}/healthz`);
+    check(health.status === 200, `GET /healthz -> 200 even with auth on (got ${health.status})`);
+    const healthJson = (await health.json()) as { status?: unknown };
+    check(
+      healthJson.status === "ok",
+      `/healthz body { status: "ok" } (got ${JSON.stringify(healthJson)})`,
+    );
 
     /* ---- GET metadata -> 200 + resource === resourceUrl ---------- */
     const mdRes = await fetch(`${base}/.well-known/oauth-protected-resource`);
@@ -635,6 +889,8 @@ async function testHttpNoAuth(): Promise<void> {
 async function main(): Promise<void> {
   testPureJwt();
   await testMetadataAndVerifier();
+  await testJwks();
+  await testJwksFailureModes();
   await testGuard();
   await testHttpWithAuth();
   await testHttpNoAuth();
