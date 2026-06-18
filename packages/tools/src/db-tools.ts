@@ -65,7 +65,7 @@ export async function provisionDatabaseTool(
     return { error: UNSUPPORTED_ENGINE_MESSAGE };
   }
 
-  const creds = getDbCredentials(args.engine, ctx);
+  const creds = await getDbCredentials(args.engine, ctx);
   if (creds === null) {
     return {
       error:

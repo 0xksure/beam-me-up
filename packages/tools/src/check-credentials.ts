@@ -18,13 +18,13 @@ import {
   type CredentialContext,
 } from "@beam-me-up/adapters";
 
-export function checkCredentials(
+export async function checkCredentials(
   ctx?: CredentialContext,
-): CheckCredentialsOutput {
-  const vercel = getProviderToken("vercel", ctx) !== null;
-  const digitalocean = getProviderToken("digitalocean", ctx) !== null;
-  const neon = getDbCredentials("postgres", ctx) !== null;
-  const upstash = getDbCredentials("redis", ctx) !== null;
+): Promise<CheckCredentialsOutput> {
+  const vercel = (await getProviderToken("vercel", ctx)) !== null;
+  const digitalocean = (await getProviderToken("digitalocean", ctx)) !== null;
+  const neon = (await getDbCredentials("postgres", ctx)) !== null;
+  const upstash = (await getDbCredentials("redis", ctx)) !== null;
 
   const rows: { name: string; ok: boolean; env: string }[] = [
     { name: "vercel", ok: vercel, env: "VERCEL_TOKEN" },
