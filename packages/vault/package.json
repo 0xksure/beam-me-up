@@ -1,0 +1,24 @@
+{
+  "name": "@beam-me-up/vault",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@beam-me-up/adapters": "*",
+    "@beam-me-up/core": "*",
+    "pg": "^8.13.0"
+  },
+  "optionalDependencies": {
+    "@aws-sdk/client-kms": "^3.700.0",
+    "@google-cloud/kms": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0"
+  }
+}
