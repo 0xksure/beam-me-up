@@ -32,7 +32,7 @@ import type {
   SetEnvVarsOutput,
   ToolError,
 } from "@beam-me-up/core";
-import type { DeployTarget } from "@beam-me-up/adapters";
+import type { DeployTarget, CredentialContext } from "@beam-me-up/adapters";
 import { selectAdapter } from "@beam-me-up/adapters";
 import { getProviderToken } from "@beam-me-up/adapters";
 
@@ -54,13 +54,16 @@ function missingTokenMessage(provider: "vercel" | "digitalocean"): string {
  * still compare at runtime so a value that slips past validation is rejected
  * before it ever reaches a provider REST API.
  */
-function resolveAdapter(provider: string): DeployTarget | ToolError {
+function resolveAdapter(
+  provider: string,
+  ctx?: CredentialContext,
+): DeployTarget | ToolError {
   if (provider !== "vercel" && provider !== "digitalocean") {
     return {
       error: `Unknown provider "${provider}". Use "vercel" or "digitalocean".`,
     };
   }
-  const token = getProviderToken(provider);
+  const token = getProviderToken(provider, ctx);
   if (token === null) {
     return { error: missingTokenMessage(provider) };
   }
@@ -81,8 +84,9 @@ function toErrorMessage(err: unknown): string {
 
 export async function createDeployTarget(
   args: CreateDeployTargetInput,
+  ctx?: CredentialContext,
 ): Promise<CreateDeployTargetOutput | ToolError> {
-  const adapter = resolveAdapter(args.provider);
+  const adapter = resolveAdapter(args.provider, ctx);
   if (isToolError(adapter)) return adapter;
   try {
     const { targetId, dashboardUrl } = await adapter.createProject({
@@ -97,8 +101,9 @@ export async function createDeployTarget(
 
 export async function setEnvVarsTool(
   args: SetEnvVarsInput,
+  ctx?: CredentialContext,
 ): Promise<SetEnvVarsOutput | ToolError> {
-  const adapter = resolveAdapter(args.provider);
+  const adapter = resolveAdapter(args.provider, ctx);
   if (isToolError(adapter)) return adapter;
   try {
     return await adapter.setEnvVars({
@@ -112,8 +117,9 @@ export async function setEnvVarsTool(
 
 export async function deployTool(
   args: DeployInput,
+  ctx?: CredentialContext,
 ): Promise<DeployOutput | ToolError> {
-  const adapter = resolveAdapter(args.provider);
+  const adapter = resolveAdapter(args.provider, ctx);
   if (isToolError(adapter)) return adapter;
 
   // Provider-specific deploy source: Vercel uploads local files, DigitalOcean
@@ -152,8 +158,9 @@ export async function deployTool(
 
 export async function getDeployLogs(
   args: GetDeployLogsInput,
+  ctx?: CredentialContext,
 ): Promise<GetDeployLogsOutput | ToolError> {
-  const adapter = resolveAdapter(args.provider);
+  const adapter = resolveAdapter(args.provider, ctx);
   if (isToolError(adapter)) return adapter;
   try {
     const result = await adapter.getLogs({

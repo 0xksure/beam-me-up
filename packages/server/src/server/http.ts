@@ -32,6 +32,7 @@ import { createServer as createHttpServer, type IncomingMessage, type Server } f
 import { fileURLToPath } from "node:url";
 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
 import { createServer } from "../mcp/server.js";
 import { resolveOAuthGuard } from "../auth/oauth/guard.js";
@@ -169,12 +170,37 @@ export function createBeamHttpServer(): Server {
         res.end(JSON.stringify(result.body));
         return;
       }
+
+      // M9 P1 — IDENTITY SEAM: stop discarding the verified claims. Carry the
+      // authenticated subject through the SDK's per-request channel by setting
+      // req.auth to an SDK-shaped AuthInfo BEFORE transport.handleRequest, so it
+      // surfaces to tool handlers as extra.authInfo. The SDK AuthInfo has no
+      // `subject` field, so the JWT sub rides in authInfo.extra.subject.
+      //
+      // NOTE: we deliberately do NOT yet build a resolving CredentialContext or
+      // pass one into createServer() — the per-user vault is P2. Production
+      // behaviour is unchanged: createServer() runs with no ctx, so credentials
+      // still resolve from process.env.
+      const rawHeader = req.headers.authorization?.trim() ?? "";
+      const bearer = rawHeader.slice(7).trim();
+      const authInfo: AuthInfo = {
+        token: bearer,
+        clientId: result.auth.clientId ?? "",
+        scopes: result.auth.scopes,
+        expiresAt: result.auth.expiresAt,
+        extra: {
+          subject: result.auth.subject,
+          claims: result.auth.claims,
+        },
+      };
+      (req as IncomingMessage & { auth?: AuthInfo }).auth = authInfo;
     }
 
     try {
       const body = await readBody(req);
 
-      // Stateless: a fresh MCP server + transport per request.
+      // Stateless: a fresh MCP server + transport per request. createServer() is
+      // called with NO ctx (the credential vault is P2); env creds are used.
       const server = createServer();
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

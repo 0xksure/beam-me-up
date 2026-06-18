@@ -4,17 +4,27 @@
  * before doing expensive work (building images, provisioning a DB, etc.).
  *
  * Reads only PRESENCE via the existing getProviderToken / getDbCredentials
- * resolvers (which read env vars); it never reads out or echoes a credential
- * value. No network, no filesystem.
+ * resolvers; it never reads out or echoes a credential value. No network, no
+ * filesystem.
+ *
+ * M9 P1: when a per-user CredentialContext is supplied, presence is probed via
+ * ctx.resolve/ctx.resolveDb (non-null => present) so an authenticated user sees
+ * THEIR connected providers; without ctx the behaviour is unchanged (env).
  */
 import type { CheckCredentialsOutput } from "@beam-me-up/core";
-import { getDbCredentials, getProviderToken } from "@beam-me-up/adapters";
+import {
+  getDbCredentials,
+  getProviderToken,
+  type CredentialContext,
+} from "@beam-me-up/adapters";
 
-export function checkCredentials(): CheckCredentialsOutput {
-  const vercel = getProviderToken("vercel") !== null;
-  const digitalocean = getProviderToken("digitalocean") !== null;
-  const neon = getDbCredentials("postgres") !== null;
-  const upstash = getDbCredentials("redis") !== null;
+export function checkCredentials(
+  ctx?: CredentialContext,
+): CheckCredentialsOutput {
+  const vercel = getProviderToken("vercel", ctx) !== null;
+  const digitalocean = getProviderToken("digitalocean", ctx) !== null;
+  const neon = getDbCredentials("postgres", ctx) !== null;
+  const upstash = getDbCredentials("redis", ctx) !== null;
 
   const rows: { name: string; ok: boolean; env: string }[] = [
     { name: "vercel", ok: vercel, env: "VERCEL_TOKEN" },

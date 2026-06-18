@@ -13,6 +13,7 @@
     "beam-me-up": "./dist/server/stdio.js"
   },
   "dependencies": {
+    "@beam-me-up/adapters": "*",
     "@beam-me-up/core": "*",
     "@beam-me-up/detect": "*",
     "@beam-me-up/tools": "*",

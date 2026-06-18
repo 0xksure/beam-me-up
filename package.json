@@ -21,7 +21,8 @@
     "test:m4": "tsx test/m4.test.ts",
     "test:m5": "tsx test/m5.test.ts",
     "test:m7": "tsx test/m7.test.ts",
-    "test:m8": "tsx test/m8.test.ts"
+    "test:m8": "tsx test/m8.test.ts",
+    "test:m9": "tsx test/m9.test.ts"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

@@ -10,6 +10,7 @@
  *     where argsSchema is a ZodRawShape and cb returns { messages }.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { CredentialContext } from "@beam-me-up/adapters";
 
 import {
   beamMeUpPromptArgsShape,
@@ -88,7 +89,15 @@ function deployToolResult(value: { error: string } | Record<string, unknown>) {
   };
 }
 
-export function createServer(): McpServer {
+/**
+ * Build the Beam Me Up McpServer.
+ *
+ * M9 P1: an optional per-request CredentialContext (built from the verified
+ * OAuth subject) is forwarded into the credentialed tools so they resolve
+ * credentials PER USER. When ctx is undefined (stdio / no-auth loopback) the
+ * tools fall back to process.env — behaviour is identical to before.
+ */
+export function createServer(ctx?: CredentialContext): McpServer {
   const server = new McpServer({
     name: "beam-me-up",
     version: "0.0.0",
@@ -132,7 +141,7 @@ export function createServer(): McpServer {
       outputSchema: checkCredentialsOutputShape,
     },
     () => {
-      const result = checkCredentials();
+      const result = checkCredentials(ctx);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -314,7 +323,7 @@ export function createServer(): McpServer {
       inputSchema: createDeployTargetInputShape,
       outputSchema: createDeployTargetOutputShape,
     },
-    async (args) => deployToolResult(await createDeployTarget(args)),
+    async (args) => deployToolResult(await createDeployTarget(args, ctx)),
   );
 
   /* ---- tool: set_env_vars (M1) ---------------------------------- */
@@ -330,7 +339,7 @@ export function createServer(): McpServer {
       inputSchema: setEnvVarsInputShape,
       outputSchema: setEnvVarsOutputShape,
     },
-    async (args) => deployToolResult(await setEnvVarsTool(args)),
+    async (args) => deployToolResult(await setEnvVarsTool(args, ctx)),
   );
 
   /* ---- tool: deploy (M1) ---------------------------------------- */
@@ -346,7 +355,7 @@ export function createServer(): McpServer {
       inputSchema: deployInputShape,
       outputSchema: deployOutputShape,
     },
-    async (args) => deployToolResult(await deployTool(args)),
+    async (args) => deployToolResult(await deployTool(args, ctx)),
   );
 
   /* ---- tool: get_deploy_logs (M1) ------------------------------- */
@@ -361,7 +370,7 @@ export function createServer(): McpServer {
       inputSchema: getDeployLogsInputShape,
       outputSchema: getDeployLogsOutputShape,
     },
-    async (args) => deployToolResult(await getDeployLogs(args)),
+    async (args) => deployToolResult(await getDeployLogs(args, ctx)),
   );
 
   /* ---- tool: provision_database (M2) ---------------------------- */
@@ -378,7 +387,7 @@ export function createServer(): McpServer {
       inputSchema: provisionDatabaseInputShape,
       outputSchema: provisionDatabaseOutputShape,
     },
-    async (args) => deployToolResult(await provisionDatabaseTool(args)),
+    async (args) => deployToolResult(await provisionDatabaseTool(args, ctx)),
   );
 
   return server;
