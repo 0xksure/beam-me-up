@@ -314,6 +314,11 @@ export function createPgCredentialStore(deps: PgCredentialStoreDeps): Credential
           const teamId = row.provider_account_id || undefined;
           return teamId ? { token: result.accessToken, teamId } : { token: result.accessToken };
         }
+        // refreshFn is configured but there is no stored refresh token: the
+        // access token is at/past expiry and cannot be renewed -> signal
+        // "reconnect needed" rather than handing back a doomed token.
+        await client.query("COMMIT");
+        return null;
       }
 
       const token = await openAccess(subject, row);

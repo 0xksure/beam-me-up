@@ -33,7 +33,18 @@ export class LocalDevKekProvider implements KekProvider {
     return { wrappedDek, keyId: this.currentKeyId };
   }
 
-  async unwrap(wrappedDek: Buffer, _keyId: string): Promise<Buffer> {
+  async unwrap(wrappedDek: Buffer, keyId: string): Promise<Buffer> {
+    // The envelope carries key_id per row to support rotation. This provider
+    // holds exactly one key, so reject any other key_id with a clear error
+    // rather than silently using the wrong key (which would fail the GCM tag
+    // with no explanation). A self-host operator rotating the local KEK must
+    // keep the prior key available to unwrap old rows.
+    if (keyId !== this.currentKeyId) {
+      throw new Error(
+        `LocalDevKekProvider: unknown key_id "${keyId}" (this provider only holds ` +
+          `"${this.currentKeyId}"). Keep the prior KEK to unwrap rows wrapped with it.`,
+      );
+    }
     const nonce = wrappedDek.subarray(0, NONCE_BYTES);
     const tag = wrappedDek.subarray(wrappedDek.length - TAG_BYTES);
     const body = wrappedDek.subarray(NONCE_BYTES, wrappedDek.length - TAG_BYTES);
