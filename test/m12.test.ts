@@ -38,6 +38,9 @@ import {
   verifyConfirmToken,
 } from "@beam-me-up/tools";
 import type { CredentialContext, ConnectionInfo } from "@beam-me-up/adapters";
+import { createServer } from "@beam-me-up/server";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 /* ------------------------------------------------------------------ */
 /* Tiny assertion harness (mirrors m5 / m11)                           */
@@ -466,6 +469,78 @@ async function testCopyLint(): Promise<void> {
   );
 }
 
+/* ================================================================== */
+/* (E) END-TO-END over the MCP SDK (the layer the direct tests skip)   */
+/* ================================================================== */
+
+/** Parse the JSON envelope from an MCP tool result's text content (or null). */
+function envelopeOf(result: unknown): Record<string, unknown> | null {
+  const content = (result as { content?: Array<{ type: string; text?: string }> }).content;
+  const text = content?.[0]?.text;
+  if (typeof text !== "string") return null;
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return null; // a flat error rides as a plain string, not JSON
+  }
+}
+
+/**
+ * Drive the gate THROUGH createServer + the MCP SDK transport — the exact path
+ * the direct-handler tests bypass, where the two critical wiring bugs lived:
+ *   (1) the SDK strips an undeclared confirmToken during input validation, and
+ *   (2) the SDK rejects a non-error result that has an outputSchema but no
+ *       structuredContent (turning needsConnect/needsConfirmation into -32602).
+ */
+async function testEndToEndOverSdk(): Promise<void> {
+  process.stdout.write("\n[E] end-to-end over the MCP SDK (confirmToken survives input validation; envelopes are not -32602)\n");
+
+  const ctx = makeCtx({
+    subject: "alice",
+    connections: [
+      { provider: "vercel", providerAccountId: "alices-team", status: "active", token: "alice-vercel-tok" },
+    ],
+  });
+  const server = createServer(ctx);
+  const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverT);
+  const client = new Client({ name: "m12-e2e", version: "0.0.0" });
+  await client.connect(clientT);
+
+  try {
+    const deployArgs = { provider: "vercel", targetId: "t1", projectName: "recipe-app" };
+
+    // Call 1 (no confirmToken): a PARSEABLE needsConfirmation, not isError, not -32602.
+    const r1 = await client.callTool({ name: "deploy", arguments: deployArgs });
+    check(r1.isError !== true, "e2e: needsConfirmation is NOT delivered as an MCP error");
+    const env1 = envelopeOf(r1);
+    check(env1?.status === "needsConfirmation", `e2e: deploy without a token -> needsConfirmation (got ${env1?.status})`);
+    const confirmToken = env1?.confirmToken;
+    check(typeof confirmToken === "string" && confirmToken.length > 0, "e2e: needsConfirmation carries a confirmToken");
+
+    // Call 2 (same args + confirmToken): the SDK must PRESERVE confirmToken (it is a
+    // declared input field) so the gate PASSES. `files` is omitted, so the deploy
+    // then fails fast on input-completeness (no network) — the point is the result
+    // is NO LONGER needsConfirmation, and no -32602 ever reached the client.
+    const r2 = await client.callTool({ name: "deploy", arguments: { ...deployArgs, confirmToken } });
+    const text2 = (r2.content as Array<{ type: string; text?: string }>)?.[0]?.text ?? "";
+    const status2 = envelopeOf(r2)?.status;
+    check(status2 !== "needsConfirmation", `e2e: a valid confirmToken PASSES the gate, not an infinite loop (got ${status2 ?? text2.slice(0, 60)})`);
+    check(!text2.includes("-32602"), "e2e: no MCP output-validation (-32602) error reached the client");
+
+    // Call 3 (a provider with NO connection): a PARSEABLE needsConnect, not -32602.
+    const r3 = await client.callTool({
+      name: "deploy",
+      arguments: { provider: "digitalocean", targetId: "t2", projectName: "x", image: "registry.example/x:1" },
+    });
+    check(r3.isError !== true, "e2e: needsConnect is NOT delivered as an MCP error");
+    const env3 = envelopeOf(r3);
+    check(env3?.status === "needsConnect", `e2e: no connection -> needsConnect (got ${env3?.status})`);
+  } finally {
+    await client.close();
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -475,6 +550,7 @@ async function main(): Promise<void> {
   await testConfirmGate();
   await testNeedsConnectVsEnv();
   await testCopyLint();
+  await testEndToEndOverSdk();
   process.stdout.write(`\nm12.test: PASS (${passCount} checks)\n`);
 }
 

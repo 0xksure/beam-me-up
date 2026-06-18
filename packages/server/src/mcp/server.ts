@@ -99,9 +99,10 @@ function statusOf(value: unknown): string | undefined {
 function deployToolResult(value: { error: string } | Record<string, unknown>) {
   const status = statusOf(value);
 
-  // The non-`ok` envelopes (needsConnect / needsConfirmation / error) do NOT
-  // match the tool's success outputSchema, so they ride as TEXT content only
-  // (no structuredContent) to avoid SDK output-schema validation. The host
+  // These tools register NO outputSchema (they are polymorphic: success |
+  // needsConnect | needsConfirmation | error). The non-`ok` envelopes ride as
+  // TEXT content only (no structuredContent) — the SDK would otherwise reject a
+  // non-error result that lacks structuredContent matching the schema. The host
   // parses `status` + `host` from the JSON text. isError is set ONLY for
   // status "error".
   if (status === "error" || status === "needsConnect" || status === "needsConfirmation") {
@@ -378,7 +379,10 @@ export function createServer(ctx?: CredentialContext): McpServer {
         "project (needs VERCEL_TOKEN); provider \"digitalocean\" creates a " +
         "DigitalOcean App Platform app (needs DIGITALOCEAN_TOKEN).",
       inputSchema: createDeployTargetInputShape,
-      outputSchema: createDeployTargetOutputShape,
+      // No outputSchema: this tool is polymorphic (success | needsConnect |
+      // needsConfirmation | error). The SDK requires structuredContent matching
+      // the outputSchema on every non-error result, which the text-only envelopes
+      // can't satisfy; declaring none lets them ride as text (host parses status).
     },
     async (args) => deployToolResult(await createDeployTarget(args, ctx)),
   );
@@ -394,7 +398,7 @@ export function createServer(ctx?: CredentialContext): McpServer {
         "Vercel project or a DigitalOcean app). Returns how many were set. " +
         "Secret values are never echoed back.",
       inputSchema: setEnvVarsInputShape,
-      outputSchema: setEnvVarsOutputShape,
+      // No outputSchema: polymorphic output (see create_deploy_target).
     },
     async (args) => deployToolResult(await setEnvVarsTool(args, ctx)),
   );
@@ -410,7 +414,7 @@ export function createServer(ctx?: CredentialContext): McpServer {
         "container `image` to the App Platform app. Returns the deploymentId, " +
         "the live URL, and the initial deploy status.",
       inputSchema: deployInputShape,
-      outputSchema: deployOutputShape,
+      // No outputSchema: polymorphic output (see create_deploy_target).
     },
     async (args) => deployToolResult(await deployTool(args, ctx)),
   );
@@ -425,7 +429,8 @@ export function createServer(ctx?: CredentialContext): McpServer {
         "so you can diagnose a failed build. Returns the current status, the " +
         "joined log text, and a summary of the last error when the deploy failed.",
       inputSchema: getDeployLogsInputShape,
-      outputSchema: getDeployLogsOutputShape,
+      // No outputSchema: polymorphic output (can return needsConnect on the
+      // vault path when there's no connection; see create_deploy_target).
     },
     async (args) => deployToolResult(await getDeployLogs(args, ctx)),
   );
@@ -442,7 +447,7 @@ export function createServer(ctx?: CredentialContext): McpServer {
         "UPSTASH_API_KEY). Returns { provider, resourceId, envVars } - feed " +
         "envVars into set_env_vars. Credentials are never echoed back.",
       inputSchema: provisionDatabaseInputShape,
-      outputSchema: provisionDatabaseOutputShape,
+      // No outputSchema: polymorphic output (see create_deploy_target).
     },
     async (args) => deployToolResult(await provisionDatabaseTool(args, ctx)),
   );

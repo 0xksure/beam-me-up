@@ -222,6 +222,44 @@ async function initializeStatus(port: number, token: string): Promise<number> {
   return status;
 }
 
+/** Like initializeStatus but also returns the response body for jargon-scanning. */
+async function requestStatusBody(port: number, token: string): Promise<{ status: number; body: string }> {
+  const body = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "m11", version: "0" } },
+  });
+  const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      Authorization: `Bearer ${token}`,
+    },
+    body,
+  });
+  return { status: res.status, body: await res.text() };
+}
+
+/**
+ * Extend the P3 copy-lint to the TRANSPORT layer: the user-facing
+ * error_description on a 401/503 must carry no scary machine jargon (the machine
+ * `error` code may — a host AI shouldn't read it verbatim).
+ */
+function assertDescriptionPlain(body: string, where: string): void {
+  let desc = body;
+  try {
+    desc = (JSON.parse(body) as { error_description?: string }).error_description ?? body;
+  } catch {
+    /* not JSON; scan the raw body */
+  }
+  const lower = desc.toLowerCase();
+  for (const term of ["vault", "token", "subject", "credential", "oauth", "api key", "secret"]) {
+    check(!lower.includes(term), `${where}: user-facing description must not contain "${term}" (got ${JSON.stringify(desc.slice(0, 100))})`);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Store seeding helpers                                               */
 /* ------------------------------------------------------------------ */
@@ -298,8 +336,9 @@ async function testSubRejection(): Promise<void> {
       const port = await listenEphemeral(server);
 
       // No-sub token on the vault path -> 401 (vault never keys on a wildcard).
-      const noSubStatus = await initializeStatus(port, tokenFor(null));
-      check(noSubStatus === 401, `no-sub token + store active -> 401 (got ${noSubStatus})`);
+      const noSub = await requestStatusBody(port, tokenFor(null));
+      check(noSub.status === 401, `no-sub token + store active -> 401 (got ${noSub.status})`);
+      assertDescriptionPlain(noSub.body, "401 no-sub body");
 
       // Control: the SAME server accepts a token WITH a sub (not 401/403).
       const okStatus = await initializeStatus(port, tokenFor("bob"));
@@ -419,8 +458,9 @@ async function testVaultBuildFailureIs503(): Promise<void> {
       const port = await listenEphemeral(server);
 
       // A build failure must NOT hang the request or fall back to env creds.
-      const status1 = await initializeStatus(port, tokenFor("alice"));
-      check(status1 === 503, `vault build failure -> fail-closed 503 (not env creds, not a hang) (got ${status1})`);
+      const r1 = await requestStatusBody(port, tokenFor("alice"));
+      check(r1.status === 503, `vault build failure -> fail-closed 503 (not env creds, not a hang) (got ${r1.status})`);
+      assertDescriptionPlain(r1.body, "503 vault-unavailable body");
 
       // And the rejected build must not poison the path: a repeat is still a clean 503.
       const status2 = await initializeStatus(port, tokenFor("alice"));

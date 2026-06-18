@@ -283,12 +283,15 @@ export function createBeamHttpServer(opts?: { store?: CredentialStore }): Server
         // creds when the vault is the source of truth — rather than letting the
         // rejection escape the listener (which would hang the request, crash the
         // process on an unhandled rejection, and poison the cached store).
+        // Plain, reassuring copy for the user (the host AI surfaces it); the
+        // precise machine reason stays in the stderr log only.
         process.stderr.write(`[beam-me-up] vault store unavailable: ${String(err)}\n`);
         res.writeHead(503, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
-            error: "vault_unavailable",
-            error_description: "The credential vault is temporarily unavailable.",
+            error: "service_unavailable",
+            error_description:
+              "Something on our end is briefly unavailable. Please try again in a moment — your app and your accounts are safe, and nothing was charged.",
           }),
         );
         return;
@@ -299,9 +302,12 @@ export function createBeamHttpServer(opts?: { store?: CredentialStore }): Server
             claims: result.auth.claims,
             subject: result.auth.subject,
           });
-        } catch {
-          const description =
-            "The access token must carry a non-empty subject (sub) to resolve per-user credentials.";
+        } catch (err) {
+          // Precise reason (missing/empty sub claim) to the log only; the user
+          // sees plain language. A sub-less token is a structural dead-end (the
+          // IdP isn't issuing a subject), so steer them to sign in again.
+          process.stderr.write(`[beam-me-up] rejecting a token without a usable subject: ${String(err)}\n`);
+          const description = "We couldn't verify your sign-in. Please sign in again.";
           res.writeHead(401, {
             "Content-Type": "application/json",
             "WWW-Authenticate": wwwAuthenticate(guard.config, {

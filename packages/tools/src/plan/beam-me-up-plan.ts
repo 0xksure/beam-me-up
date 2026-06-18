@@ -106,6 +106,16 @@ button's \`action\` is the entire path forward. Branch ONLY on \`status\`:*
   creating/mutating tool without a valid \`confirmToken\` performs NO side effect.
 - \`status: "error"\` — a genuine failure; render \`host.speak\` + buttons.
 
+**Transport-layer failures (HTTP 401 / 503, no \`host\` block).** A few failures
+happen at the connection layer BEFORE any tool runs, so they carry only an HTTP
+status + a short \`error_description\` and NO \`host.speak\`. Speak these in plain,
+reassuring language and NEVER repeat machine words (vault, token, subject,
+server). For a **503**: say it's a brief hiccup on our end, the user's app and
+accounts are safe and nothing was charged, and offer a single **"Try again"**.
+For a **401** (we couldn't verify their sign-in): ask them to sign in again; if it
+keeps failing after a couple of tries, tell them it's on us, STOP retrying, and
+point them to support rather than looping forever.
+
 **Free-tier promise (standing rule):** at the roadmap, before EACH hand-off, and
 on success, reassure the user that this is free — Beam only ever uses free tiers
 and warns them long before anything could cost money. Before each browser

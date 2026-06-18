@@ -569,6 +569,13 @@ export const createDeployTargetInputShape = {
   provider: DeployProviderSchema,
   projectName: z.string(),
   framework: z.string().optional(),
+  /**
+   * M9 P3a: the destination-confirmation token re-supplied when the user taps
+   * "Yes, deploy". MUST be a declared field — the MCP SDK strips unknown keys
+   * during input validation, so an undeclared confirmToken never reaches the
+   * handler and the confirm gate would loop forever.
+   */
+  confirmToken: z.string().optional(),
 } as const;
 export const CreateDeployTargetInputSchema = z.object(
   createDeployTargetInputShape,
@@ -601,6 +608,8 @@ export const setEnvVarsInputShape = {
   provider: DeployProviderSchema,
   targetId: z.string(),
   vars: z.array(EnvVarSchema),
+  /** M9 P3a: destination-confirmation token (see createDeployTargetInputShape). */
+  confirmToken: z.string().optional(),
 } as const;
 export const SetEnvVarsInputSchema = z.object(setEnvVarsInputShape);
 export type SetEnvVarsInput = z.infer<typeof SetEnvVarsInputSchema>;
@@ -645,6 +654,8 @@ export const deployInputShape = {
       'REQUIRED when provider="digitalocean" (a container image ref, e.g. "registry.digitalocean.com/reg/web:1.2.3"). Ignored for provider="vercel".',
     ),
   target: z.enum(["production", "preview"]).optional(),
+  /** M9 P3a: destination-confirmation token (see createDeployTargetInputShape). */
+  confirmToken: z.string().optional(),
 } as const;
 export const DeployInputSchema = z.object(deployInputShape);
 export type DeployInput = z.infer<typeof DeployInputSchema>;
@@ -702,6 +713,8 @@ export const provisionDatabaseInputShape = {
   engine: DbEngineSchema,
   name: z.string(),
   region: z.string().optional(),
+  /** M9 P3a: destination-confirmation token (see createDeployTargetInputShape). */
+  confirmToken: z.string().optional(),
 } as const;
 export const ProvisionDatabaseInputSchema = z.object(
   provisionDatabaseInputShape,
