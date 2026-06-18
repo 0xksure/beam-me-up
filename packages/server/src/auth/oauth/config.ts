@@ -13,8 +13,12 @@
  *   OAUTH_ISSUER          (req) the AS issuer URL; must match the token `iss`.
  *   OAUTH_AUDIENCE        (req) this resource's identifier; must be in token `aud`.
  *   OAUTH_JWT_SECRET      HS256 shared secret  -> alg "HS256".
- *   OAUTH_JWT_PUBLIC_KEY  RS256 PEM public key -> alg "RS256".
- *     (exactly one of SECRET / PUBLIC_KEY; SECRET wins if both, but log nothing.)
+ *   OAUTH_JWT_PUBLIC_KEY  RS256 static PEM public key -> alg "RS256".
+ *   OAUTH_JWKS_URI        RS256 via JWKS: the AS's JWKS URL (preferred for a
+ *                         managed IdP whose signing key rotates) -> alg "RS256".
+ *     (a key is required: SECRET (HS256), or PUBLIC_KEY / JWKS_URI (RS256). When
+ *      both a secret and an RS256 key are set, SECRET wins. When both PUBLIC_KEY
+ *      and JWKS_URI are set, the JWKS endpoint is used. Log nothing either way.)
  *   OAUTH_RESOURCE_URL    (opt) this server's resource URL for the metadata
  *                         `resource` field; defaults to
  *                         `http://localhost:${PORT}/mcp`.
@@ -40,8 +44,10 @@ export type OAuthConfig = {
   alg: "HS256" | "RS256";
   /** HS256 shared secret (present iff alg === "HS256"). */
   secret?: string;
-  /** RS256 PEM public key (present iff alg === "RS256"). */
+  /** RS256 static PEM public key (RS256 only; used when no jwksUri is set). */
   publicKeyPem?: string;
+  /** RS256 JWKS endpoint (RS256 only; takes precedence over publicKeyPem). */
+  jwksUri?: string;
   /** Scopes every token must carry (may be empty). */
   requiredScopes: string[];
   /** Absolute URL of the protected-resource metadata document. */
@@ -64,9 +70,10 @@ export function getOAuthConfig(): OAuthConfig | null {
   const audience = trimmed(env.OAUTH_AUDIENCE);
   const secret = trimmed(env.OAUTH_JWT_SECRET);
   const publicKeyPem = trimmed(env.OAUTH_JWT_PUBLIC_KEY);
+  const jwksUri = trimmed(env.OAUTH_JWKS_URI);
 
-  // ENABLED iff issuer && audience && (secret || publicKey); else disabled.
-  if (!issuer || !audience || !(secret || publicKeyPem)) {
+  // ENABLED iff issuer && audience && a key (HS256 secret, or RS256 PEM/JWKS).
+  if (!issuer || !audience || !(secret || publicKeyPem || jwksUri)) {
     return null;
   }
 
@@ -94,6 +101,7 @@ export function getOAuthConfig(): OAuthConfig | null {
   const metadataUrl = new URL(metadataPath, resourceUrl).toString();
 
   // SECRET wins if both are set; only carry the key material for the chosen alg.
+  // For RS256, a JWKS endpoint takes precedence over a static PEM.
   return {
     issuer,
     audience,
@@ -101,6 +109,7 @@ export function getOAuthConfig(): OAuthConfig | null {
     alg,
     secret: alg === "HS256" ? secret : undefined,
     publicKeyPem: alg === "RS256" ? publicKeyPem : undefined,
+    jwksUri: alg === "RS256" ? jwksUri : undefined,
     requiredScopes,
     metadataUrl,
     metadataPath,
