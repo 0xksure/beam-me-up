@@ -10,6 +10,9 @@
   ],
   "references": [
     {
+      "path": "../adapters"
+    },
+    {
       "path": "../core"
     },
     {

@@ -20,7 +20,11 @@
  *   - any provider/runtime error is caught and returned as { error }.
  *   - credentials / connection strings are never logged.
  */
-import type { DbEngine, ProvisionResult } from "@beam-me-up/adapters";
+import type {
+  DbEngine,
+  ProvisionResult,
+  CredentialContext,
+} from "@beam-me-up/adapters";
 import type { ToolError } from "@beam-me-up/core";
 import { selectDbProvisioner } from "@beam-me-up/adapters";
 import { getDbCredentials } from "@beam-me-up/adapters";
@@ -44,11 +48,14 @@ function toErrorMessage(err: unknown): string {
   return "Unexpected error while talking to the database provider.";
 }
 
-export async function provisionDatabaseTool(args: {
-  engine: DbEngine;
-  name: string;
-  region?: string;
-}): Promise<ProvisionResult | ToolError> {
+export async function provisionDatabaseTool(
+  args: {
+    engine: DbEngine;
+    name: string;
+    region?: string;
+  },
+  ctx?: CredentialContext,
+): Promise<ProvisionResult | ToolError> {
   // Reject unsupported engines before touching creds or the provider. The
   // `engine` field is statically narrowed to "postgres" | "redis" by the zod
   // enum, but we still compare at runtime so a value that slips past validation
@@ -58,7 +65,7 @@ export async function provisionDatabaseTool(args: {
     return { error: UNSUPPORTED_ENGINE_MESSAGE };
   }
 
-  const creds = getDbCredentials(args.engine);
+  const creds = getDbCredentials(args.engine, ctx);
   if (creds === null) {
     return {
       error:

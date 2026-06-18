@@ -20,9 +20,29 @@ import type {
   UpstashCreds,
 } from "./db/interface.js";
 
+/**
+ * CredentialContext (M9 P1) — the per-user identity SEAM.
+ *
+ * When a request is authenticated (OAuth bearer), the HTTP layer can build a
+ * CredentialContext keyed on the JWT subject and thread it through the tools so
+ * credentials resolve PER USER instead of from the server's process.env. M9 P1
+ * only establishes the seam: the resolvers below delegate to ctx when present
+ * and otherwise keep the existing env reads, so stdio / no-auth loopback are
+ * unchanged. The credential VAULT that ctx.resolve/resolveDb consults is a later
+ * phase (P2); here ctx is supplied only by tests.
+ */
+export type CredentialContext = {
+  subject: string;
+  resolve(provider: "vercel" | "digitalocean"): ProviderToken | null;
+  resolveDb(engine: DbEngine): NeonCreds | UpstashCreds | null;
+};
+
 export function getProviderToken(
   provider: "vercel" | "digitalocean",
+  ctx?: CredentialContext,
 ): ProviderToken | null {
+  // Per-user resolution wins when an identity context is present (P2 vault).
+  if (ctx) return ctx.resolve(provider);
   switch (provider) {
     case "vercel": {
       const token = process.env.VERCEL_TOKEN?.trim();
@@ -54,7 +74,10 @@ export function getProviderToken(
  */
 export function getDbCredentials(
   engine: DbEngine,
+  ctx?: CredentialContext,
 ): NeonCreds | UpstashCreds | null {
+  // Per-user resolution wins when an identity context is present (P2 vault).
+  if (ctx) return ctx.resolveDb(engine);
   switch (engine) {
     case "postgres": {
       const apiKey = process.env.NEON_API_KEY?.trim();
