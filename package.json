@@ -22,7 +22,9 @@
     "test:m5": "tsx test/m5.test.ts",
     "test:m7": "tsx test/m7.test.ts",
     "test:m8": "tsx test/m8.test.ts",
-    "test:m9": "tsx test/m9.test.ts"
+    "test:m9": "tsx test/m9.test.ts",
+    "test:m10": "tsx test/m10.test.ts",
+    "vault:migrate": "tsx packages/vault/src/migrate.ts"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

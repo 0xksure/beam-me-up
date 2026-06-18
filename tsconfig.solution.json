@@ -11,6 +11,9 @@
       "path": "packages/templates"
     },
     {
+      "path": "packages/vault"
+    },
+    {
       "path": "packages/adapters"
     },
     {
