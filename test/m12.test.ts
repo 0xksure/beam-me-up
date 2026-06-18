@@ -541,6 +541,50 @@ async function testEndToEndOverSdk(): Promise<void> {
   }
 }
 
+/* ================================================================== */
+/* (F) confirm-secret HOSTED GUARDRAIL (no public-dev-key bypass)       */
+/* ================================================================== */
+
+async function testConfirmSecretHostedGuardrail(): Promise<void> {
+  process.stdout.write("\n[F] confirm-secret hosted guardrail (the public dev key can't bypass the gate on hosted)\n");
+  const savedTier = process.env.BEAM_TIER;
+  const savedSecret = process.env.BEAM_CONFIRM_TOKEN_SECRET;
+  const mintArgs = {
+    tool: "deploy",
+    subject: "alice",
+    args: { provider: "vercel", projectName: "x" },
+    destinations: [{ provider: "vercel", accountLabel: "alice@example.com" }],
+  };
+  try {
+    // Hosted + no secret -> minting MUST throw (no fallback to the public dev key).
+    process.env.BEAM_TIER = "hosted";
+    delete process.env.BEAM_CONFIRM_TOKEN_SECRET;
+    let threw = false;
+    try {
+      mintConfirmToken(mintArgs);
+    } catch {
+      threw = true;
+    }
+    check(threw, "hosted + no BEAM_CONFIRM_TOKEN_SECRET -> mintConfirmToken THROWS (no dev-key bypass)");
+
+    // Hosted + a real secret -> works again.
+    process.env.BEAM_CONFIRM_TOKEN_SECRET = "a-strong-operator-secret-0123456789";
+    const t = mintConfirmToken(mintArgs);
+    check(typeof t.token === "string" && t.token.length > 0, "hosted + a real secret -> mintConfirmToken works");
+
+    // Self-host (not hosted) + no secret -> the dev default is allowed.
+    delete process.env.BEAM_TIER;
+    delete process.env.BEAM_CONFIRM_TOKEN_SECRET;
+    const t2 = mintConfirmToken(mintArgs);
+    check(typeof t2.token === "string" && t2.token.length > 0, "self-host + no secret -> dev default still allowed");
+  } finally {
+    if (savedTier === undefined) delete process.env.BEAM_TIER;
+    else process.env.BEAM_TIER = savedTier;
+    if (savedSecret === undefined) delete process.env.BEAM_CONFIRM_TOKEN_SECRET;
+    else process.env.BEAM_CONFIRM_TOKEN_SECRET = savedSecret;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -551,6 +595,7 @@ async function main(): Promise<void> {
   await testNeedsConnectVsEnv();
   await testCopyLint();
   await testEndToEndOverSdk();
+  await testConfirmSecretHostedGuardrail();
   process.stdout.write(`\nm12.test: PASS (${passCount} checks)\n`);
 }
 

@@ -19,8 +19,12 @@
  * and needing no DB. TRUE single-use (consume-on-success via `oauth_states`) is
  * a P3b hardening; this slice provides the structural offline guarantee.
  *
- * The signing secret comes from `BEAM_CONFIRM_TOKEN_SECRET` with a clearly
- * marked dev default (so offline tests + local self-host work out of the box).
+ * The signing secret comes from `BEAM_CONFIRM_TOKEN_SECRET`, with a clearly
+ * marked dev default so offline tests + local self-host work out of the box. The
+ * dev default is FORBIDDEN on the hosted tier (BEAM_TIER=hosted) — `secret()`
+ * throws if the env var is unset there, mirroring the KEK / Postgres-TLS hosted
+ * guardrails — because the public dev key would let anyone mint a valid token and
+ * bypass the human "Yes, deploy" confirmation.
  */
 import crypto from "node:crypto";
 
@@ -32,9 +36,19 @@ export const DEV_CONFIRM_TOKEN_SECRET =
 export const CONFIRM_TOKEN_TTL_SECONDS = 600;
 
 function secret(): string {
-  return (
-    process.env.BEAM_CONFIRM_TOKEN_SECRET?.trim() || DEV_CONFIRM_TOKEN_SECRET
-  );
+  const configured = process.env.BEAM_CONFIRM_TOKEN_SECRET?.trim();
+  if (configured) return configured;
+  // Hosted guardrail: the public dev default would let anyone forge a valid
+  // confirmToken and bypass the human confirmation gate, so it is refused on the
+  // hosted tier (mirrors buildKekProvider + the vault PG-TLS guard).
+  if (process.env.BEAM_TIER === "hosted") {
+    throw new Error(
+      "BEAM_CONFIRM_TOKEN_SECRET is required on the hosted tier (BEAM_TIER=hosted): " +
+        "without it the destination-confirmation gate could be bypassed using the " +
+        "public dev default. Set a strong random secret.",
+    );
+  }
+  return DEV_CONFIRM_TOKEN_SECRET;
 }
 
 function b64url(buf: Buffer | string): string {

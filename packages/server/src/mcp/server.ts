@@ -33,15 +33,10 @@ import {
   scaffoldAuthInputShape,
   scaffoldAuthOutputShape,
   createDeployTargetInputShape,
-  createDeployTargetOutputShape,
   setEnvVarsInputShape,
-  setEnvVarsOutputShape,
   deployInputShape,
-  deployOutputShape,
   getDeployLogsInputShape,
-  getDeployLogsOutputShape,
   provisionDatabaseInputShape,
-  provisionDatabaseOutputShape,
 } from "@beam-me-up/core";
 import { renderBeamMeUpPlan } from "@beam-me-up/tools";
 import { checkCredentials, listConnections } from "@beam-me-up/tools";
