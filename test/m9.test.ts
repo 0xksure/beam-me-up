@@ -67,10 +67,10 @@ function makeCtx(
 ): CredentialContext {
   return {
     subject,
-    resolve(provider: "vercel" | "digitalocean"): ProviderToken | null {
+    async resolve(provider: "vercel" | "digitalocean"): Promise<ProviderToken | null> {
       return connected[provider] ?? null;
     },
-    resolveDb(engine: DbEngine): NeonCreds | UpstashCreds | null {
+    async resolveDb(engine: DbEngine): Promise<NeonCreds | UpstashCreds | null> {
       return connected[engine] ?? null;
     },
   };
@@ -149,7 +149,7 @@ async function callCheckCredentials(client: Client): Promise<CredsResult> {
 /* (a) ctx WINS over env in getProviderToken                          */
 /* ================================================================== */
 
-function testCtxWinsOverEnv(): void {
+async function testCtxWinsOverEnv(): Promise<void> {
   process.stdout.write("\n[a] ctx resolution WINS over a set env var\n");
 
   const saved = snapshotEnv();
@@ -162,7 +162,7 @@ function testCtxWinsOverEnv(): void {
       vercel: { token: "ctx-vercel-token", teamId: "ctx-team" },
     });
 
-    const fromCtx = getProviderToken("vercel", ctx);
+    const fromCtx = await getProviderToken("vercel", ctx);
     check(
       fromCtx !== null && fromCtx.token === "ctx-vercel-token",
       `getProviderToken("vercel", ctx) returns the ctx token (got ${JSON.stringify(fromCtx)})`,
@@ -174,7 +174,7 @@ function testCtxWinsOverEnv(): void {
 
     // Sanity: without ctx the SAME call returns the env token, proving the only
     // difference is the presence of ctx.
-    const fromEnv = getProviderToken("vercel");
+    const fromEnv = await getProviderToken("vercel");
     check(
       fromEnv !== null && fromEnv.token === "env-vercel-token",
       `getProviderToken("vercel") with no ctx still reads env (got ${JSON.stringify(fromEnv)})`,
@@ -184,7 +184,7 @@ function testCtxWinsOverEnv(): void {
     // env var is present (ctx is authoritative when supplied).
     process.env.DIGITALOCEAN_TOKEN = "env-do-token";
     check(
-      getProviderToken("digitalocean", ctx) === null,
+      (await getProviderToken("digitalocean", ctx)) === null,
       "ctx without a digitalocean connection returns null, ignoring the env DIGITALOCEAN_TOKEN",
     );
   } finally {
@@ -196,17 +196,17 @@ function testCtxWinsOverEnv(): void {
 /* (b) no ctx -> env reads still work (toggle env)                    */
 /* ================================================================== */
 
-function testNoCtxReadsEnv(): void {
+async function testNoCtxReadsEnv(): Promise<void> {
   process.stdout.write("\n[b] no ctx -> getProviderToken/getDbCredentials read env\n");
 
   const saved = snapshotEnv();
   try {
     /* ---- env UNSET -> null --------------------------------------- */
     clearEnv();
-    check(getProviderToken("vercel") === null, "env unset: getProviderToken(vercel) === null");
-    check(getProviderToken("digitalocean") === null, "env unset: getProviderToken(digitalocean) === null");
-    check(getDbCredentials("postgres") === null, "env unset: getDbCredentials(postgres) === null");
-    check(getDbCredentials("redis") === null, "env unset: getDbCredentials(redis) === null");
+    check((await getProviderToken("vercel")) === null, "env unset: getProviderToken(vercel) === null");
+    check((await getProviderToken("digitalocean")) === null, "env unset: getProviderToken(digitalocean) === null");
+    check((await getDbCredentials("postgres")) === null, "env unset: getDbCredentials(postgres) === null");
+    check((await getDbCredentials("redis")) === null, "env unset: getDbCredentials(redis) === null");
 
     /* ---- env SET -> resolved ------------------------------------- */
     process.env.VERCEL_TOKEN = "v-tok";
@@ -215,13 +215,13 @@ function testNoCtxReadsEnv(): void {
     process.env.UPSTASH_EMAIL = "me@example.com";
     process.env.UPSTASH_API_KEY = "up-key";
 
-    const v = getProviderToken("vercel");
+    const v = await getProviderToken("vercel");
     check(v !== null && v.token === "v-tok", "env set: getProviderToken(vercel) reads VERCEL_TOKEN");
-    const d = getProviderToken("digitalocean");
+    const d = await getProviderToken("digitalocean");
     check(d !== null && d.token === "do-tok", "env set: getProviderToken(digitalocean) reads DIGITALOCEAN_TOKEN");
-    const pg = getDbCredentials("postgres") as NeonCreds | null;
+    const pg = (await getDbCredentials("postgres")) as NeonCreds | null;
     check(pg !== null && pg.apiKey === "neon-key", "env set: getDbCredentials(postgres) reads NEON_API_KEY");
-    const rd = getDbCredentials("redis") as UpstashCreds | null;
+    const rd = (await getDbCredentials("redis")) as UpstashCreds | null;
     check(
       rd !== null && rd.email === "me@example.com" && rd.apiKey === "up-key",
       "env set: getDbCredentials(redis) reads UPSTASH_EMAIL + UPSTASH_API_KEY",
@@ -297,13 +297,13 @@ async function testSubjectIsolation(): Promise<void> {
 
     // Direct-resolver isolation.
     check(
-      getProviderToken("vercel", ctx1)?.token === "s1-vercel",
+      (await getProviderToken("vercel", ctx1))?.token === "s1-vercel",
       "subject-1 resolves its own vercel token",
     );
-    check(getDbCredentials("postgres", ctx1) === null, "subject-1 has no neon connection");
-    check(getProviderToken("vercel", ctx2) === null, "subject-2 has no vercel connection");
+    check((await getDbCredentials("postgres", ctx1)) === null, "subject-1 has no neon connection");
+    check((await getProviderToken("vercel", ctx2)) === null, "subject-2 has no vercel connection");
     check(
-      (getDbCredentials("postgres", ctx2) as NeonCreds | null)?.apiKey === "s2-neon",
+      ((await getDbCredentials("postgres", ctx2)) as NeonCreds | null)?.apiKey === "s2-neon",
       "subject-2 resolves its own neon credential",
     );
 
@@ -334,8 +334,8 @@ async function testSubjectIsolation(): Promise<void> {
 /* ------------------------------------------------------------------ */
 
 async function main(): Promise<void> {
-  testCtxWinsOverEnv();
-  testNoCtxReadsEnv();
+  await testCtxWinsOverEnv();
+  await testNoCtxReadsEnv();
   await testCreateServerForwardsCtx();
   await testSubjectIsolation();
   process.stdout.write(`\nm9.test: PASS (${passCount} checks)\n`);

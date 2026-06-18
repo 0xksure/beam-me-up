@@ -28,19 +28,24 @@ import type {
  * credentials resolve PER USER instead of from the server's process.env. M9 P1
  * only establishes the seam: the resolvers below delegate to ctx when present
  * and otherwise keep the existing env reads, so stdio / no-auth loopback are
- * unchanged. The credential VAULT that ctx.resolve/resolveDb consults is a later
- * phase (P2); here ctx is supplied only by tests.
+ * unchanged. The credential VAULT that ctx.resolve/resolveDb consults is wired
+ * in P2c.
+ *
+ * The resolvers are ASYNC (the vault store hits Postgres + KMS), so resolve /
+ * resolveDb return Promises and every call site awaits getProviderToken /
+ * getDbCredentials. The no-ctx env path returns the same resolved values it
+ * always did — behaviour with no ctx is identical.
  */
 export type CredentialContext = {
   subject: string;
-  resolve(provider: "vercel" | "digitalocean"): ProviderToken | null;
-  resolveDb(engine: DbEngine): NeonCreds | UpstashCreds | null;
+  resolve(provider: "vercel" | "digitalocean"): Promise<ProviderToken | null>;
+  resolveDb(engine: DbEngine): Promise<NeonCreds | UpstashCreds | null>;
 };
 
-export function getProviderToken(
+export async function getProviderToken(
   provider: "vercel" | "digitalocean",
   ctx?: CredentialContext,
-): ProviderToken | null {
+): Promise<ProviderToken | null> {
   // Per-user resolution wins when an identity context is present (P2 vault).
   if (ctx) return ctx.resolve(provider);
   switch (provider) {
@@ -72,10 +77,10 @@ export function getProviderToken(
  * surface a helpful "set NEON_API_KEY" (or the Upstash pair) message instead of
  * throwing. Credential values are never logged here.
  */
-export function getDbCredentials(
+export async function getDbCredentials(
   engine: DbEngine,
   ctx?: CredentialContext,
-): NeonCreds | UpstashCreds | null {
+): Promise<NeonCreds | UpstashCreds | null> {
   // Per-user resolution wins when an identity context is present (P2 vault).
   if (ctx) return ctx.resolveDb(engine);
   switch (engine) {

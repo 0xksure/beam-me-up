@@ -140,8 +140,8 @@ export function createServer(ctx?: CredentialContext): McpServer {
       inputSchema: checkCredentialsInputShape,
       outputSchema: checkCredentialsOutputShape,
     },
-    () => {
-      const result = checkCredentials(ctx);
+    async () => {
+      const result = await checkCredentials(ctx);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         structuredContent: result,

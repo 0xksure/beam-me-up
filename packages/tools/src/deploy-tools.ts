@@ -54,16 +54,16 @@ function missingTokenMessage(provider: "vercel" | "digitalocean"): string {
  * still compare at runtime so a value that slips past validation is rejected
  * before it ever reaches a provider REST API.
  */
-function resolveAdapter(
+async function resolveAdapter(
   provider: string,
   ctx?: CredentialContext,
-): DeployTarget | ToolError {
+): Promise<DeployTarget | ToolError> {
   if (provider !== "vercel" && provider !== "digitalocean") {
     return {
       error: `Unknown provider "${provider}". Use "vercel" or "digitalocean".`,
     };
   }
-  const token = getProviderToken(provider, ctx);
+  const token = await getProviderToken(provider, ctx);
   if (token === null) {
     return { error: missingTokenMessage(provider) };
   }
@@ -86,7 +86,7 @@ export async function createDeployTarget(
   args: CreateDeployTargetInput,
   ctx?: CredentialContext,
 ): Promise<CreateDeployTargetOutput | ToolError> {
-  const adapter = resolveAdapter(args.provider, ctx);
+  const adapter = await resolveAdapter(args.provider, ctx);
   if (isToolError(adapter)) return adapter;
   try {
     const { targetId, dashboardUrl } = await adapter.createProject({
@@ -103,7 +103,7 @@ export async function setEnvVarsTool(
   args: SetEnvVarsInput,
   ctx?: CredentialContext,
 ): Promise<SetEnvVarsOutput | ToolError> {
-  const adapter = resolveAdapter(args.provider, ctx);
+  const adapter = await resolveAdapter(args.provider, ctx);
   if (isToolError(adapter)) return adapter;
   try {
     return await adapter.setEnvVars({
@@ -119,7 +119,7 @@ export async function deployTool(
   args: DeployInput,
   ctx?: CredentialContext,
 ): Promise<DeployOutput | ToolError> {
-  const adapter = resolveAdapter(args.provider, ctx);
+  const adapter = await resolveAdapter(args.provider, ctx);
   if (isToolError(adapter)) return adapter;
 
   // Provider-specific deploy source: Vercel uploads local files, DigitalOcean
@@ -160,7 +160,7 @@ export async function getDeployLogs(
   args: GetDeployLogsInput,
   ctx?: CredentialContext,
 ): Promise<GetDeployLogsOutput | ToolError> {
-  const adapter = resolveAdapter(args.provider, ctx);
+  const adapter = await resolveAdapter(args.provider, ctx);
   if (isToolError(adapter)) return adapter;
   try {
     const result = await adapter.getLogs({

@@ -34,8 +34,19 @@ import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
+import type { CredentialContext } from "@beam-me-up/adapters";
+import {
+  buildCredentialContext,
+  createPgCredentialStore,
+  makePool,
+  EnvelopeCrypto,
+  buildKekProvider,
+  type CredentialStore,
+} from "@beam-me-up/vault";
+
 import { createServer } from "../mcp/server.js";
 import { resolveOAuthGuard } from "../auth/oauth/guard.js";
+import { wwwAuthenticate } from "../auth/oauth/metadata.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 /** Default to loopback so the API is not exposed unless the operator opts in. */
@@ -125,13 +136,61 @@ function checkOriginGuard(req: IncomingMessage): { ok: true } | { ok: false; rea
   return { ok: true };
 }
 
+/* ------------------------------------------------------------------ */
+/* Vault store seam (P2c)                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Build the per-user credential vault store from the environment, or return
+ * null when no vault is configured.
+ *
+ * GATED on BEAM_VAULT_DATABASE_URL: when it is unset this returns null WITHOUT
+ * constructing a pool or touching pg/KMS, so a no-vault boot is byte-for-byte
+ * the old env-creds path. When it IS set we build a process-singleton
+ * PgCredentialStore over makePool() + an EnvelopeCrypto wrapping the KEK from
+ * buildKekProvider(). The result is cached as a promise so concurrent first
+ * requests share one store.
+ */
+let vaultStorePromise: Promise<CredentialStore | null> | undefined;
+
+export function resolveVaultStore(): Promise<CredentialStore | null> {
+  if (vaultStorePromise) return vaultStorePromise;
+  // Guard FIRST: never construct a pool / KEK when no vault DB is configured.
+  if (!process.env.BEAM_VAULT_DATABASE_URL) {
+    vaultStorePromise = Promise.resolve(null);
+    return vaultStorePromise;
+  }
+  vaultStorePromise = (async (): Promise<CredentialStore> => {
+    const hosted = process.env.BEAM_TIER === "hosted";
+    const kek = await buildKekProvider({ hosted, env: process.env });
+    const crypto = new EnvelopeCrypto(kek);
+    const pool = makePool();
+    return createPgCredentialStore({ pool, crypto });
+  })();
+  return vaultStorePromise;
+}
+
+/** Test helper: drop the cached vault store so a fresh one can be resolved. */
+export function resetVaultStoreForTests(): void {
+  vaultStorePromise = undefined;
+}
+
 /**
  * Build the Beam Me Up HTTP server (not yet listening). The OAuth guard is
  * resolved from the environment HERE, so callers/tests set env before calling.
+ *
+ * P2c: the per-user credential vault store is INJECTABLE for tests via
+ * `opts.store`. When omitted, the store is resolved lazily from the environment
+ * (resolveVaultStore) — null unless BEAM_VAULT_DATABASE_URL is set, in which
+ * case behaviour is UNCHANGED (createServer runs with no ctx, env creds).
  */
-export function createBeamHttpServer(): Server {
+export function createBeamHttpServer(opts?: { store?: CredentialStore }): Server {
   // null when OAuth is disabled (no-auth localhost mode).
   const guard = resolveOAuthGuard();
+
+  // An injected store wins; otherwise resolve lazily from env (gated).
+  const resolveStore = (): Promise<CredentialStore | null> =>
+    opts?.store !== undefined ? Promise.resolve(opts.store) : resolveVaultStore();
 
   return createHttpServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
@@ -168,6 +227,13 @@ export function createBeamHttpServer(): Server {
 
     // Bearer-token auth when OAuth is enabled. A failure short-circuits before
     // we ever touch the MCP server.
+    //
+    // P2c — per-request CredentialContext: when a vault store is configured AND
+    // OAuth is on, the verified identity is turned into a vault-backed ctx that
+    // createServer() threads into the credentialed tools (per-user creds). When
+    // NO store is configured, ctx stays undefined and createServer() runs on
+    // env creds exactly as before.
+    let ctx: CredentialContext | undefined;
     if (guard) {
       const result = await guard.authorize(req.headers.authorization);
       if (!result.ok) {
@@ -184,11 +250,6 @@ export function createBeamHttpServer(): Server {
       // req.auth to an SDK-shaped AuthInfo BEFORE transport.handleRequest, so it
       // surfaces to tool handlers as extra.authInfo. The SDK AuthInfo has no
       // `subject` field, so the JWT sub rides in authInfo.extra.subject.
-      //
-      // NOTE: we deliberately do NOT yet build a resolving CredentialContext or
-      // pass one into createServer() — the per-user vault is P2. Production
-      // behaviour is unchanged: createServer() runs with no ctx, so credentials
-      // still resolve from process.env.
       const rawHeader = req.headers.authorization?.trim() ?? "";
       const bearer = rawHeader.slice(7).trim();
       const authInfo: AuthInfo = {
@@ -202,14 +263,46 @@ export function createBeamHttpServer(): Server {
         },
       };
       (req as IncomingMessage & { auth?: AuthInfo }).auth = authInfo;
+
+      // P2c — build the per-user vault context on the vault path. A token
+      // lacking a non-empty sub on the vault path is rejected (401 invalid_token):
+      // buildCredentialContext throws on an empty/missing subject, and we map
+      // that to a 401 so the vault is never keyed on a wildcard / clientId.
+      const store = await resolveStore();
+      if (store) {
+        try {
+          ctx = buildCredentialContext(store, {
+            claims: result.auth.claims,
+            subject: result.auth.subject,
+          });
+        } catch {
+          const description =
+            "The access token must carry a non-empty subject (sub) to resolve per-user credentials.";
+          res.writeHead(401, {
+            "Content-Type": "application/json",
+            "WWW-Authenticate": wwwAuthenticate(guard.config, {
+              error: "invalid_token",
+              description,
+            }),
+          });
+          res.end(
+            JSON.stringify({
+              error: "invalid_token",
+              error_description: description,
+            }),
+          );
+          return;
+        }
+      }
     }
 
     try {
       const body = await readBody(req);
 
-      // Stateless: a fresh MCP server + transport per request. createServer() is
-      // called with NO ctx (the credential vault is P2); env creds are used.
-      const server = createServer();
+      // Stateless: a fresh MCP server + transport per request. On the vault path
+      // createServer(ctx) resolves per-user creds; with no ctx it uses env creds
+      // (behaviour unchanged from the no-vault path).
+      const server = createServer(ctx);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
