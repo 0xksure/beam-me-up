@@ -29,6 +29,7 @@
  */
 const LIVE_TOOLS = [
   "check_credentials",
+  "list_connections",
   "build_image_plan",
   "preflight_scan",
   "review_code",
@@ -83,6 +84,35 @@ ${modeLine}
 - **[CONFIRM]** — pause and get the user's explicit go-ahead before proceeding.
   Never deploy, rotate secrets, or change access policy without confirmation.
 
+### How to render a tool RESULT (the result-envelope contract)
+
+Beam is an MCP server: it returns *tool results*, not UI. Every credentialed
+tool result carries a top-level **\`status\`** discriminator — \`ok\`,
+\`needsConnect\`, \`needsConfirmation\`, or \`error\` — and every non-\`ok\` result
+carries a server-owned **\`host\`** block (\`speak\` + \`buttons\`).
+
+**Host-AI rendering rule:** *If a tool result has a \`host\` block, render
+\`host.speak\` VERBATIM as a chat message and each \`host.buttons[i]\` as a tappable
+button. Do NOT show the raw \`error\` string. Do NOT invent next steps — a
+button's \`action\` is the entire path forward. Branch ONLY on \`status\`:*
+- \`status: "ok"\` — the side effect happened (or the read succeeded). Surface the
+  success copy and any \`costSoFar\`.
+- \`status: "needsConnect"\` — the user has no usable connection for a provider.
+  Speak the pre-framing first, then open the Connect button's URL; re-call the
+  original tool (\`resumeHint: "autoProbe"\`) so the chat resumes automatically.
+- \`status: "needsConfirmation"\` — a create/change is gated. STOP and ask: render
+  the two buttons and DO NOT proceed until the user taps the "Yes" button (which
+  re-invokes the SAME tool with the SAME args plus the \`confirmToken\`). A
+  creating/mutating tool without a valid \`confirmToken\` performs NO side effect.
+- \`status: "error"\` — a genuine failure; render \`host.speak\` + buttons.
+
+**Free-tier promise (standing rule):** at the roadmap, before EACH hand-off, and
+on success, reassure the user that this is free — Beam only ever uses free tiers
+and warns them long before anything could cost money. Before each browser
+hand-off add: *"On the next screen, ignore anything about paid plans or upgrades
+— always pick the free option. We'll never put you on a paid plan."* Keep
+\`costSoFar: "$0"\` visible on confirm + success.
+
 ### Live now vs. coming later
 
 The **deploy path is real, end to end, for BOTH providers**: create the target,
@@ -108,10 +138,28 @@ set env vars, deploy, and read build logs are all live MCP tools — \`vercel\`
 
 ## The plan
 
+### 0a. [HOST-AI] Show the roadmap FIRST — **LIVE**
+The FIRST time the user asks to ship (e.g. "beam me up"), BEFORE any tool call,
+say in their words: *"Getting your app online takes about 2–3 minutes and is
+completely free. Here's the whole plan: we'll connect where your code lives,
+where your app runs, and (when it's ready) your database — I'll confirm exactly
+where everything goes before I create anything, and walk you through each step.
+Ready?"* Offer a **[Let's go]** button. Then keep a visible checklist —
+**☐ Code storage ☐ Hosting ☐ Database** — and tick a box on each connect (the
+\`progress\` object on every needsConnect / recovery / resume result drives the
+"N of 3" tally). This is the single anti-abandonment lever for the mid-chat
+Connect hand-offs.
+
 ### 0. [MCP-TOOL: check_credentials] What can we actually ship with? — **LIVE**
-Call **\`check_credentials\`** FIRST (no input). It returns booleans for
-\`vercel\` / \`digitalocean\` / \`neon\` / \`upstash\` plus \`configured\` /
-\`missing\`, read from the server's environment (values are never echoed).
+Call **\`check_credentials\`** FIRST (no input) for cheap HOST ROUTING +
+progress. It returns booleans for \`vercel\` / \`digitalocean\` / \`neon\` /
+\`upstash\`, a \`connections[]\` rollup, a \`progress\` tally, and (per-user) a
+\`host\` directive — values are never echoed.
+
+For anything the USER sees (showing accounts, switching where the app goes), call
+**\`list_connections\`** instead: it returns plain status lines (GitHub, Vercel,
+DigitalOcean, your database, your cache) with connect/switch/disconnect actions
+— never internal IDs or developer terms.
 - Use it to **route around gaps before doing expensive work.** If the provider
   you'd route to (or the DB you'd provision) is in \`missing\`, tell the user
   up front which env var to set (e.g. \`DIGITALOCEAN_TOKEN\`, \`NEON_API_KEY\`)

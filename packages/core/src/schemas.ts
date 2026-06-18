@@ -145,6 +145,261 @@ export const writeTodoOutputShape = {
 export const WriteTodoOutputSchema = z.object(writeTodoOutputShape);
 export type WriteTodoOutput = z.infer<typeof WriteTodoOutputSchema>;
 
+/* ================================================================== */
+/* M9 P3a — the shared tool-output result envelope                     */
+/* ================================================================== */
+
+/*
+ * Beam is an MCP server: it returns *tool results*, not UI. Every UX moment is
+ * a structured tool result the host AI renders. The envelope below is the
+ * single shared contract for every NON-`ok` credentialed-tool result.
+ *
+ *   status        — the discriminator the host branches on.
+ *   host          — server-owned plain-language copy (`speak`) + `buttons`. The
+ *                   host renders `host.speak` verbatim and each button as a tap
+ *                   target; it NEVER invents next steps and NEVER shows a raw
+ *                   `error` string. (See the host-rendering rule in
+ *                   beam-me-up-plan.ts.)
+ *
+ * `isError` is set on the MCP result ONLY for `status: "error"` — the server
+ * wrapper keys off `status`. needsConnect / needsConfirmation are normal (not
+ * error) results that simply carry a next step.
+ *
+ * These shapes are emitted only on the per-user (`ctx` present) path. The
+ * no-`ctx` self-host/stdio path keeps the existing env-var messages verbatim —
+ * that audience wants `Set the VERCEL_TOKEN…`.
+ */
+
+/** Provider display names — fixed by the spec, never abbreviations. */
+export const ProviderNameSchema = z.enum([
+  "github",
+  "vercel",
+  "digitalocean",
+  "neon",
+  "upstash",
+]);
+export type ProviderName = z.infer<typeof ProviderNameSchema>;
+
+/** What a destination/connection is FOR, in Sam's terms. */
+export const ConnectionRoleSchema = z.enum(["code", "hosting", "database"]);
+export type ConnectionRole = z.infer<typeof ConnectionRoleSchema>;
+
+export const resultStatusShape = z.enum([
+  "ok",
+  "needsConnect",
+  "needsConfirmation",
+  "error",
+]);
+export type ResultStatus = z.infer<typeof resultStatusShape>;
+
+/** A running connect/recovery tally the host renders as "N of 3". */
+export const progressShape = {
+  connected: z.number().int().nonnegative(),
+  total: z.number().int().positive(),
+  nextRole: z.string().optional(),
+  label: z.string().optional(),
+} as const;
+export const ProgressSchema = z.object(progressShape);
+export type Progress = z.infer<typeof ProgressSchema>;
+
+/**
+ * A button action. `callTool` re-invokes a Beam tool (e.g. the confirm path
+ * re-calls the same tool WITH the confirmToken); `openUrl` opens a Connect /
+ * connections page; `cancel` abandons with no tool call.
+ */
+export const HostButtonActionSchema = z.union([
+  z.object({
+    kind: z.literal("callTool"),
+    tool: z.string(),
+    args: z.record(z.string(), z.unknown()),
+  }),
+  z.object({ kind: z.literal("openUrl"), url: z.string() }),
+  z.object({ kind: z.literal("cancel") }),
+]);
+export type HostButtonAction = z.infer<typeof HostButtonActionSchema>;
+
+export const HostButtonSchema = z.object({
+  label: z.string(),
+  action: HostButtonActionSchema,
+});
+export type HostButton = z.infer<typeof HostButtonSchema>;
+
+/** The server-owned host directive carried on every non-`ok` result. */
+export const HostDirectiveSchema = z.object({
+  speak: z.string(),
+  buttons: z.array(HostButtonSchema),
+  progress: ProgressSchema.optional(),
+});
+export type HostDirective = z.infer<typeof HostDirectiveSchema>;
+
+/* ---- needsConfirmation (the destination gate, §1) ---------------- */
+
+export const DestinationLabelSchema = z.object({
+  provider: ProviderNameSchema,
+  role: ConnectionRoleSchema,
+  /** Non-secret display label from the vault connection (providerAccountId). */
+  accountLabel: z.string(),
+  teamLabel: z.string().optional(),
+  freeTier: z.boolean().optional(),
+});
+export type DestinationLabel = z.infer<typeof DestinationLabelSchema>;
+
+export const NeedsConfirmationResultSchema = z.object({
+  status: z.literal("needsConfirmation"),
+  tool: z.string(),
+  actionSummary: z.string(),
+  destinations: z.array(DestinationLabelSchema),
+  resourceName: z.string(),
+  confirmToken: z.string(),
+  confirmTokenExpiresAt: z.string(),
+  costSoFar: z.literal("$0"),
+  host: HostDirectiveSchema,
+});
+export type NeedsConfirmationResult = z.infer<
+  typeof NeedsConfirmationResultSchema
+>;
+
+/* ---- needsConnect (the mid-chat Connect round-trip, §2) ---------- */
+
+export const NeedsConnectReasonSchema = z.enum([
+  "no_connection",
+  "expired",
+  "revoked",
+]);
+export type NeedsConnectReason = z.infer<typeof NeedsConnectReasonSchema>;
+
+export const NeedsConnectResultSchema = z.object({
+  status: z.literal("needsConnect"),
+  provider: ProviderNameSchema,
+  role: ConnectionRoleSchema,
+  connectUrl: z.string(),
+  reason: NeedsConnectReasonSchema,
+  progress: ProgressSchema.optional(),
+  safety: z.object({
+    free: z.literal(true),
+    canSpendMoney: z.literal(false),
+    disconnectable: z.literal(true),
+  }),
+  resumeHint: z.literal("autoProbe"),
+  host: HostDirectiveSchema,
+});
+export type NeedsConnectResult = z.infer<typeof NeedsConnectResultSchema>;
+
+/* ---- the error-recovery copy deck (§3) --------------------------- */
+
+export const RecoveryKindSchema = z.enum([
+  "connect",
+  "reconnect_expired",
+  "reconnect_failed",
+  "reconnect_revoked",
+  "wrong_account",
+  "connect_abandoned",
+  "db_needs_managed",
+]);
+export type RecoveryKind = z.infer<typeof RecoveryKindSchema>;
+
+/** The `database` synthetic provider covers the role-level DB copy. */
+export const RecoveryProviderSchema = z.enum([
+  "github",
+  "vercel",
+  "digitalocean",
+  "neon",
+  "upstash",
+  "database",
+]);
+export type RecoveryProvider = z.infer<typeof RecoveryProviderSchema>;
+
+export const RecoverySchema = z.object({
+  kind: RecoveryKindSchema,
+  provider: RecoveryProviderSchema,
+  /** Stable machine code (host bookkeeping only — NEVER shown to the user). */
+  errorCode: z.string(),
+  headline: z.string(),
+  reassurance: z.string(),
+  primaryAction: z.object({ label: z.string(), action: HostButtonActionSchema }),
+  secondaryAction: z
+    .object({ label: z.string(), action: HostButtonActionSchema })
+    .optional(),
+  progress: ProgressSchema.optional(),
+});
+export type Recovery = z.infer<typeof RecoverySchema>;
+
+/** An `error`-status envelope: a genuine failure with plain-language copy. */
+export const ErrorResultSchema = z.object({
+  status: z.literal("error"),
+  /** Stable machine code — host bookkeeping only, never shown. */
+  errorCode: z.string().optional(),
+  /** Structured recovery block, when this error has a recovery path. */
+  recovery: RecoverySchema.optional(),
+  host: HostDirectiveSchema,
+});
+export type ErrorResult = z.infer<typeof ErrorResultSchema>;
+
+/**
+ * The full union a credentialed tool can return on the ctx path. `ok` results
+ * are the tools' own success outputs (now additively carrying `costSoFar` +
+ * `host`); the three non-`ok` envelopes carry their own `status`.
+ */
+export type CredentialedToolEnvelope =
+  | NeedsConnectResult
+  | NeedsConfirmationResult
+  | ErrorResult;
+
+/** Narrow any value to one of the non-`ok` envelopes (host bookkeeping). */
+export function isNonOkEnvelope(
+  value: unknown,
+): value is CredentialedToolEnvelope {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "status" in value &&
+    ((value as { status?: unknown }).status === "needsConnect" ||
+      (value as { status?: unknown }).status === "needsConfirmation" ||
+      (value as { status?: unknown }).status === "error")
+  );
+}
+
+/* ---- the Sam-facing connections view (§4.2) ---------------------- */
+
+export const ConnectionViewStatusSchema = z.enum([
+  "connected",
+  "expired",
+  "revoked",
+  "not_connected",
+]);
+export type ConnectionViewStatus = z.infer<typeof ConnectionViewStatusSchema>;
+
+export const ConnectionSchema = z.object({
+  provider: ProviderNameSchema,
+  displayName: z.string(),
+  status: ConnectionViewStatusSchema,
+  accountLabel: z.string().optional(),
+  teamLabel: z.string().optional(),
+  statusLine: z.string(),
+  actions: z.array(
+    z.object({
+      kind: z.enum(["switch", "disconnect", "connect", "reconnect"]),
+      label: z.string(),
+      href: z.string(),
+    }),
+  ),
+  manageUrl: z.string(),
+});
+export type Connection = z.infer<typeof ConnectionSchema>;
+
+export const listConnectionsOutputShape = {
+  connections: z.array(ConnectionSchema),
+  headline: z.string(),
+  manageUrl: z.string(),
+  host: HostDirectiveSchema,
+} as const;
+export const ListConnectionsOutputSchema = z.object(listConnectionsOutputShape);
+export type ListConnectionsOutput = z.infer<typeof ListConnectionsOutputSchema>;
+
+export const listConnectionsInputShape = {} as const;
+export const ListConnectionsInputSchema = z.object(listConnectionsInputShape);
+export type ListConnectionsInput = z.infer<typeof ListConnectionsInputSchema>;
+
 /* ------------------------------------------------------------------ */
 /* check_credentials (capability check)                                */
 /* ------------------------------------------------------------------ */
@@ -159,19 +414,50 @@ export const checkCredentialsInputShape = {} as const;
 export const CheckCredentialsInputSchema = z.object(checkCredentialsInputShape);
 export type CheckCredentialsInput = z.infer<typeof CheckCredentialsInputSchema>;
 
+export const checkCredentialsConnectionShape = {
+  provider: ProviderNameSchema,
+  role: ConnectionRoleSchema,
+  connected: z.boolean(),
+  /** Present when connected (non-secret, from the vault). */
+  accountLabel: z.string().optional(),
+  /** Present when NOT connected — the /connect/<provider> URL. */
+  connectUrl: z.string().optional(),
+  status: z.enum(["active", "expired", "revoked"]).optional(),
+} as const;
+export const CheckCredentialsConnectionSchema = z.object(
+  checkCredentialsConnectionShape,
+);
+export type CheckCredentialsConnection = z.infer<
+  typeof CheckCredentialsConnectionSchema
+>;
+
 export const checkCredentialsOutputShape = {
-  /** Vercel deploys (VERCEL_TOKEN). */
+  /**
+   * Per-user connection rollup (ctx path). Each row means "does THIS user have
+   * an active connection". On the no-ctx self-host path this mirrors env
+   * presence.
+   */
+  connections: z.array(CheckCredentialsConnectionSchema),
+  /** Running tally for the host's progress checklist. */
+  progress: ProgressSchema,
+  /** Vercel deploys. */
   vercel: z.boolean(),
-  /** DigitalOcean deploys (DIGITALOCEAN_TOKEN). */
+  /** DigitalOcean deploys. */
   digitalocean: z.boolean(),
-  /** Postgres provisioning via Neon (NEON_API_KEY). */
+  /** Postgres provisioning via Neon. */
   neon: z.boolean(),
-  /** Redis provisioning via Upstash (UPSTASH_EMAIL + UPSTASH_API_KEY). */
+  /** Redis provisioning via Upstash. */
   upstash: z.boolean(),
   /** Capability names that ARE configured (a convenience for the planner). */
   configured: z.array(z.string()),
-  /** Capability names that are NOT configured, with the env var(s) to set. */
+  /**
+   * Capability names that are NOT configured. On the ctx path this reads
+   * "<name> (not connected)" — never "(set NEON_API_KEY)". On the no-ctx
+   * self-host path the env-var hint is retained.
+   */
   missing: z.array(z.string()),
+  /** Host directive: e.g. "You've connected 2 of 3." (ctx path). */
+  host: HostDirectiveSchema.optional(),
 } as const;
 export const CheckCredentialsOutputSchema = z.object(
   checkCredentialsOutputShape,
@@ -295,6 +581,10 @@ export const createDeployTargetOutputShape = {
   provider: z.string(),
   targetId: z.string(),
   dashboardUrl: z.string(),
+  /** M9 P3a: the standing money promise, surfaced on the ctx path. */
+  costSoFar: z.literal("$0").optional(),
+  /** M9 P3a: server-owned success copy for the host to render (ctx path). */
+  host: HostDirectiveSchema.optional(),
 } as const;
 export const CreateDeployTargetOutputSchema = z.object(
   createDeployTargetOutputShape,
@@ -318,6 +608,10 @@ export type SetEnvVarsInput = z.infer<typeof SetEnvVarsInputSchema>;
 export const setEnvVarsOutputShape = {
   setCount: z.number().int().nonnegative(),
   applied: z.array(z.string()),
+  /** M9 P3a: the standing money promise, surfaced on the ctx path. */
+  costSoFar: z.literal("$0").optional(),
+  /** M9 P3a: server-owned success copy for the host to render (ctx path). */
+  host: HostDirectiveSchema.optional(),
 } as const;
 export const SetEnvVarsOutputSchema = z.object(setEnvVarsOutputShape);
 export type SetEnvVarsOutput = z.infer<typeof SetEnvVarsOutputSchema>;
@@ -359,6 +653,10 @@ export const deployOutputShape = {
   deploymentId: z.string(),
   url: z.string().optional(),
   status: z.string(),
+  /** M9 P3a: the standing money promise, surfaced on the ctx path. */
+  costSoFar: z.literal("$0").optional(),
+  /** M9 P3a: server-owned success copy for the host to render (ctx path). */
+  host: HostDirectiveSchema.optional(),
 } as const;
 export const DeployOutputSchema = z.object(deployOutputShape);
 export type DeployOutput = z.infer<typeof DeployOutputSchema>;
@@ -416,6 +714,10 @@ export const provisionDatabaseOutputShape = {
   provider: z.string(),
   resourceId: z.string(),
   envVars: z.record(z.string(), z.string()),
+  /** M9 P3a: the standing money promise, surfaced on the ctx path. */
+  costSoFar: z.literal("$0").optional(),
+  /** M9 P3a: server-owned success copy for the host to render (ctx path). */
+  host: HostDirectiveSchema.optional(),
 } as const;
 export const ProvisionDatabaseOutputSchema = z.object(
   provisionDatabaseOutputShape,

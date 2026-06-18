@@ -36,10 +36,33 @@ import type {
  * getDbCredentials. The no-ctx env path returns the same resolved values it
  * always did — behaviour with no ctx is identical.
  */
+/**
+ * A non-secret connection summary the UX layer reads to (a) echo the
+ * destination account/team label in the confirmation gate and (b) decide
+ * whether a provider is connected / expired / revoked for the needsConnect +
+ * recovery copy. It is a structural subset of the vault's ConnectionSummary
+ * (no plaintext token); `providerAccountId` is the account label captured at
+ * Connect time (richer team labels arrive with the P3b connect surface).
+ */
+export type ConnectionInfo = {
+  provider: "vercel" | "digitalocean" | "github" | "neon" | "upstash";
+  /** '' when the provider has no account id. */
+  providerAccountId: string;
+  status: "active" | "expired" | "revoked";
+};
+
 export type CredentialContext = {
   subject: string;
   resolve(provider: "vercel" | "digitalocean"): Promise<ProviderToken | null>;
   resolveDb(engine: DbEngine): Promise<NeonCreds | UpstashCreds | null>;
+  /**
+   * M9 P3a: this subject's connection summaries (NO plaintext tokens), so the
+   * UX layer can echo the destination account label in the confirmation gate
+   * and pick the right needsConnect / recovery copy. Optional so older
+   * contexts (and the env path) keep type-checking; when absent the UX layer
+   * falls back to a neutral label.
+   */
+  listConnections?(): Promise<ConnectionInfo[]>;
 };
 
 export async function getProviderToken(

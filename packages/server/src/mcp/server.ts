@@ -18,6 +18,8 @@ import {
   buildImagePlanOutputShape,
   checkCredentialsInputShape,
   checkCredentialsOutputShape,
+  listConnectionsInputShape,
+  listConnectionsOutputShape,
   routeTargetInputShape,
   routeTargetOutputShape,
   validateComposeInputShape,
@@ -42,7 +44,7 @@ import {
   provisionDatabaseOutputShape,
 } from "@beam-me-up/core";
 import { renderBeamMeUpPlan } from "@beam-me-up/tools";
-import { checkCredentials } from "@beam-me-up/tools";
+import { checkCredentials, listConnections } from "@beam-me-up/tools";
 import { buildImagePlan } from "@beam-me-up/tools";
 import { routeTarget } from "@beam-me-up/detect";
 import { validateCompose } from "@beam-me-up/tools";
@@ -71,13 +73,45 @@ function isToolError(value: unknown): value is { error: string } {
   );
 }
 
+/** Read the `status` discriminator off a credentialed-tool result, if present. */
+function statusOf(value: unknown): string | undefined {
+  if (typeof value === "object" && value !== null && "status" in value) {
+    const s = (value as { status?: unknown }).status;
+    if (typeof s === "string") return s;
+  }
+  return undefined;
+}
+
 /**
- * Standard MCP tool result for a deploy tool. A returned { error } becomes an
- * isError result whose text is the message; otherwise the structured output is
- * echoed both as JSON text content and as structuredContent.
+ * Standard MCP tool result for a credentialed tool (M9 P3a result envelope).
+ *
+ * isError is set ONLY for status "error" — needsConnect / needsConfirmation are
+ * NORMAL results that carry a `host` directive + a next step (the host branches
+ * on `status`, not on isError). A flat { error } (no status) is a genuine
+ * failure from the underlying provider / a pure validation reject and stays an
+ * isError result whose text is the message. Success outputs (and the non-`ok`
+ * envelopes) are echoed as JSON text + structuredContent so the host can read
+ * `status` / `host` / `structuredContent`.
+ *
+ * NOTE: deployOutput's own `status` field (a deploy status like "queued") is NOT
+ * one of the envelope discriminators, so success outputs never set isError.
  */
 function deployToolResult(value: { error: string } | Record<string, unknown>) {
-  if (isToolError(value)) {
+  const status = statusOf(value);
+
+  // The non-`ok` envelopes (needsConnect / needsConfirmation / error) do NOT
+  // match the tool's success outputSchema, so they ride as TEXT content only
+  // (no structuredContent) to avoid SDK output-schema validation. The host
+  // parses `status` + `host` from the JSON text. isError is set ONLY for
+  // status "error".
+  if (status === "error" || status === "needsConnect" || status === "needsConfirmation") {
+    return {
+      isError: status === "error",
+      content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+    };
+  }
+  // A flat { error } with no envelope status is a genuine failure.
+  if (status === undefined && isToolError(value)) {
     return {
       isError: true as const,
       content: [{ type: "text" as const, text: value.error }],
@@ -85,7 +119,7 @@ function deployToolResult(value: { error: string } | Record<string, unknown>) {
   }
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
-    structuredContent: value,
+    structuredContent: value as Record<string, unknown>,
   };
 }
 
@@ -142,6 +176,29 @@ export function createServer(ctx?: CredentialContext): McpServer {
     },
     async () => {
       const result = await checkCredentials(ctx);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    },
+  );
+
+  /* ---- tool: list_connections (M9 P3a) -------------------------- */
+  server.registerTool(
+    "list_connections",
+    {
+      title: "Your connected accounts",
+      description:
+        "The Sam-facing view of the accounts Beam uses to put your apps online " +
+        "(GitHub, Vercel, DigitalOcean, your database, your cache). Returns a " +
+        "plain status line per account plus connect/switch/disconnect actions " +
+        "and a link to manage them. Use this for anything the USER sees; use " +
+        "check_credentials for cheap host routing. Everything here is free.",
+      inputSchema: listConnectionsInputShape,
+      outputSchema: listConnectionsOutputShape,
+    },
+    async () => {
+      const result = await listConnections(ctx);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         structuredContent: result,

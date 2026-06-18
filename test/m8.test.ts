@@ -18,7 +18,7 @@
  *   [unit] detectSecrets: a Google OAuth client secret ("GOCSPX-…") is flagged
  *     high as "google-oauth-client-secret" -> GOOGLE_CLIENT_SECRET, masked (the
  *     raw value never appears in the finding).
- *   [tool] in-memory MCP client: listTools includes "scaffold_auth" (13 tools);
+ *   [tool] in-memory MCP client: listTools includes "scaffold_auth" (14 tools);
  *     preflight_scan surfaces auth.offerGoogleAuth on the no-login fixture;
  *     scaffold_auth returns a valid, framework-tailored scaffold for nextjs /
  *     express(internal) / generic.
@@ -307,7 +307,8 @@ async function testMcpTools(): Promise<void> {
     const tools = await client.listTools();
     const names = tools.tools.map((t) => t.name);
     check(names.includes("scaffold_auth"), `listTools includes scaffold_auth (got ${JSON.stringify(names)})`);
-    check(names.length === 13, `13 tools registered (got ${names.length}: ${JSON.stringify(names)})`);
+    // M9 P3a added the Sam-facing list_connections tool -> 14 tools.
+    check(names.length === 14, `14 tools registered (got ${names.length}: ${JSON.stringify(names)})`);
 
     /* ---- preflight_scan surfaces auth.offerGoogleAuth ---- */
     const pre = await client.callTool({

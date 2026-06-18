@@ -9,17 +9,20 @@
  *     DigitalOcean App Platform),
  *   - delegates to the matching DeployTarget method,
  *   - and NEVER throws uncaught: on a missing token, an unknown provider, or a
- *     provider error it returns a structured { error: string } which the MCP
- *     handler in server.ts turns into an isError result.
+ *     provider error it returns a structured envelope the MCP handler turns
+ *     into the right result.
  *
- * Contract:
- *   - provider not "vercel"/"digitalocean" -> { error: 'Unknown provider ...' }
- *   - getProviderToken(provider) === null -> { error: <set VERCEL_TOKEN or
- *       DIGITALOCEAN_TOKEN> }
- *   - deploy: provider "vercel" needs `files`; provider "digitalocean" needs an
- *       `image` reference. The missing one returns a clear { error }.
- *   - any provider/runtime error is caught and returned as { error }.
- *   - secrets / tokens are never logged.
+ * M9 P3a — two ctx-aware behaviours wrap the side effect on the per-user path:
+ *   - NEEDS-CONNECT: when the vault has no USABLE connection for
+ *     (subject, provider) the tool returns a `needsConnect` envelope with
+ *     plain-language copy + a /connect/<provider> button — NEVER "set the
+ *     VERCEL_TOKEN…". On the no-`ctx` self-host path the env-var message is
+ *     retained verbatim (that audience wants it).
+ *   - DESTINATION CONFIRMATION: the creating/mutating tools
+ *     (create_deploy_target / deploy / set_env_vars) STOP and return
+ *     `needsConfirmation` (NO side effect) unless a valid HMAC `confirmToken`
+ *     is present, echoing the destination account label read from the vault.
+ *     get_deploy_logs (read-only) does NOT gate.
  */
 import type {
   CreateDeployTargetInput,
@@ -28,6 +31,9 @@ import type {
   DeployOutput,
   GetDeployLogsInput,
   GetDeployLogsOutput,
+  NeedsConfirmationResult,
+  NeedsConnectResult,
+  ProviderName,
   SetEnvVarsInput,
   SetEnvVarsOutput,
   ToolError,
@@ -35,8 +41,15 @@ import type {
 import type { DeployTarget, CredentialContext } from "@beam-me-up/adapters";
 import { selectAdapter } from "@beam-me-up/adapters";
 import { getProviderToken } from "@beam-me-up/adapters";
+import {
+  confirmationGate,
+  deploySuccessHost,
+  destinationLabelFor,
+  needsConnectFor,
+  readConnections,
+} from "./ux/index.js";
 
-/** Friendly "set your token" message per provider. */
+/** Friendly "set your token" message per provider (no-ctx self-host path only). */
 function missingTokenMessage(provider: "vercel" | "digitalocean"): string {
   return provider === "vercel"
     ? "No Vercel token found. Set the VERCEL_TOKEN environment variable (and optionally VERCEL_TEAM_ID) to deploy to Vercel."
@@ -46,18 +59,15 @@ function missingTokenMessage(provider: "vercel" | "digitalocean"): string {
 /**
  * Resolve the adapter for a tool call, or return a { error } envelope.
  *
- * Handles the two pre-flight failure modes the contract calls out:
- *   - an unknown provider, and
- *   - a missing token (set VERCEL_TOKEN / DIGITALOCEAN_TOKEN).
- *
- * `provider` is narrowed to "vercel" | "digitalocean" by the zod enum, but we
- * still compare at runtime so a value that slips past validation is rejected
- * before it ever reaches a provider REST API.
+ * On the no-`ctx` (self-host) path a missing token still returns the env-var
+ * message. On the `ctx` (per-user) path the caller has ALREADY run the
+ * needs-connect check, so a null here means the connection vanished mid-call —
+ * still surfaced without naming env vars.
  */
 async function resolveAdapter(
   provider: string,
   ctx?: CredentialContext,
-): Promise<DeployTarget | ToolError> {
+): Promise<DeployTarget | ToolError | NeedsConnectResult> {
   if (provider !== "vercel" && provider !== "digitalocean") {
     return {
       error: `Unknown provider "${provider}". Use "vercel" or "digitalocean".`,
@@ -65,14 +75,32 @@ async function resolveAdapter(
   }
   const token = await getProviderToken(provider, ctx);
   if (token === null) {
+    if (ctx) {
+      // ctx path: never name env vars — re-surface as needsConnect.
+      return needsConnectFor([], provider) as NeedsConnectResult;
+    }
     return { error: missingTokenMessage(provider) };
   }
   return selectAdapter(provider, token);
 }
 
-/** Narrow the resolveAdapter result. */
-function isToolError(value: DeployTarget | ToolError): value is ToolError {
-  return (value as ToolError).error !== undefined;
+/** Narrow the resolveAdapter result to a ToolError. */
+function isToolError(value: unknown): value is ToolError {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "error" in value &&
+    typeof (value as ToolError).error === "string"
+  );
+}
+
+/** Narrow to a needsConnect envelope. */
+function isNeedsConnect(value: unknown): value is NeedsConnectResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { status?: unknown }).status === "needsConnect"
+  );
 }
 
 /** Coerce any thrown value into a human-readable error string. */
@@ -82,18 +110,75 @@ function toErrorMessage(err: unknown): string {
   return "Unexpected error while talking to the deploy provider.";
 }
 
+/** The deploy providers as ProviderName (github is not a deploy target). */
+function asProviderName(provider: "vercel" | "digitalocean"): ProviderName {
+  return provider;
+}
+
+/**
+ * Run the shared ctx-aware preamble for a creating/mutating deploy tool:
+ *   1. needs-connect check (no usable connection -> needsConnect)
+ *   2. destination-confirmation gate (no valid confirmToken -> needsConfirmation)
+ * Returns a non-`ok` envelope to short-circuit, or null to proceed.
+ */
+async function ctxGate(opts: {
+  ctx: CredentialContext;
+  provider: "vercel" | "digitalocean";
+  tool: string;
+  resourceName: string;
+  args: Record<string, unknown>;
+}): Promise<NeedsConnectResult | NeedsConfirmationResult | null> {
+  const provider = asProviderName(opts.provider);
+  const connections = await readConnections(opts.ctx);
+
+  const connect = needsConnectFor(connections, provider);
+  if (connect) return connect;
+
+  const destinations = [destinationLabelFor(connections, provider)];
+  const confirm = confirmationGate({
+    tool: opts.tool,
+    subject: opts.ctx.subject,
+    resourceName: opts.resourceName,
+    args: opts.args,
+    destinations,
+  });
+  return confirm; // needsConfirmation, or null to proceed
+}
+
 export async function createDeployTarget(
   args: CreateDeployTargetInput,
   ctx?: CredentialContext,
-): Promise<CreateDeployTargetOutput | ToolError> {
+): Promise<
+  CreateDeployTargetOutput | ToolError | NeedsConnectResult | NeedsConfirmationResult
+> {
+  if (args.provider !== "vercel" && args.provider !== "digitalocean") {
+    return { error: `Unknown provider "${args.provider}". Use "vercel" or "digitalocean".` };
+  }
+  if (ctx) {
+    const gate = await ctxGate({
+      ctx,
+      provider: args.provider,
+      tool: "create_deploy_target",
+      resourceName: args.projectName,
+      args: args as unknown as Record<string, unknown>,
+    });
+    if (gate) return gate;
+  }
+
   const adapter = await resolveAdapter(args.provider, ctx);
+  if (isNeedsConnect(adapter)) return adapter;
   if (isToolError(adapter)) return adapter;
   try {
     const { targetId, dashboardUrl } = await adapter.createProject({
       name: args.projectName,
       framework: args.framework,
     });
-    return { provider: adapter.id, targetId, dashboardUrl };
+    const out: CreateDeployTargetOutput = { provider: adapter.id, targetId, dashboardUrl };
+    if (ctx) {
+      out.costSoFar = "$0";
+      out.host = deploySuccessHost({ resourceName: args.projectName });
+    }
+    return out;
   } catch (err) {
     return { error: toErrorMessage(err) };
   }
@@ -102,14 +187,34 @@ export async function createDeployTarget(
 export async function setEnvVarsTool(
   args: SetEnvVarsInput,
   ctx?: CredentialContext,
-): Promise<SetEnvVarsOutput | ToolError> {
+): Promise<
+  SetEnvVarsOutput | ToolError | NeedsConnectResult | NeedsConfirmationResult
+> {
+  if (args.provider !== "vercel" && args.provider !== "digitalocean") {
+    return { error: `Unknown provider "${args.provider}". Use "vercel" or "digitalocean".` };
+  }
+  if (ctx) {
+    const gate = await ctxGate({
+      ctx,
+      provider: args.provider,
+      tool: "set_env_vars",
+      resourceName: args.targetId,
+      args: args as unknown as Record<string, unknown>,
+    });
+    if (gate) return gate;
+  }
+
   const adapter = await resolveAdapter(args.provider, ctx);
+  if (isNeedsConnect(adapter)) return adapter;
   if (isToolError(adapter)) return adapter;
   try {
-    return await adapter.setEnvVars({
+    const result = await adapter.setEnvVars({
       targetId: args.targetId,
       vars: args.vars,
     });
+    const out: SetEnvVarsOutput = { ...result };
+    if (ctx) out.costSoFar = "$0";
+    return out;
   } catch (err) {
     return { error: toErrorMessage(err) };
   }
@@ -118,8 +223,25 @@ export async function setEnvVarsTool(
 export async function deployTool(
   args: DeployInput,
   ctx?: CredentialContext,
-): Promise<DeployOutput | ToolError> {
+): Promise<
+  DeployOutput | ToolError | NeedsConnectResult | NeedsConfirmationResult
+> {
+  if (args.provider !== "vercel" && args.provider !== "digitalocean") {
+    return { error: `Unknown provider "${args.provider}". Use "vercel" or "digitalocean".` };
+  }
+  if (ctx) {
+    const gate = await ctxGate({
+      ctx,
+      provider: args.provider,
+      tool: "deploy",
+      resourceName: args.projectName,
+      args: args as unknown as Record<string, unknown>,
+    });
+    if (gate) return gate;
+  }
+
   const adapter = await resolveAdapter(args.provider, ctx);
+  if (isNeedsConnect(adapter)) return adapter;
   if (isToolError(adapter)) return adapter;
 
   // Provider-specific deploy source: Vercel uploads local files, DigitalOcean
@@ -146,11 +268,16 @@ export async function deployTool(
       image: args.image,
       target: args.target,
     });
-    return {
+    const out: DeployOutput = {
       deploymentId: result.deploymentId,
       url: result.url,
       status: result.status,
     };
+    if (ctx) {
+      out.costSoFar = "$0";
+      out.host = deploySuccessHost({ resourceName: args.projectName, url: result.url });
+    }
+    return out;
   } catch (err) {
     return { error: toErrorMessage(err) };
   }
@@ -159,8 +286,18 @@ export async function deployTool(
 export async function getDeployLogs(
   args: GetDeployLogsInput,
   ctx?: CredentialContext,
-): Promise<GetDeployLogsOutput | ToolError> {
+): Promise<GetDeployLogsOutput | ToolError | NeedsConnectResult> {
+  // get_deploy_logs is READ-ONLY: it does NOT gate on a confirmToken. It still
+  // surfaces needsConnect (ctx path) when there's no usable connection.
+  if (ctx) {
+    if (args.provider === "vercel" || args.provider === "digitalocean") {
+      const connections = await readConnections(ctx);
+      const connect = needsConnectFor(connections, asProviderName(args.provider));
+      if (connect) return connect;
+    }
+  }
   const adapter = await resolveAdapter(args.provider, ctx);
+  if (isNeedsConnect(adapter)) return adapter;
   if (isToolError(adapter)) return adapter;
   try {
     const result = await adapter.getLogs({

@@ -35,6 +35,18 @@ export function buildCredentialContext(
     subject: subject.sub,
     resolve: (provider) => store.getProviderToken(subject, provider),
     resolveDb: (engine) => store.getDbCredentials(subject, engine),
+    // M9 P3a: expose the non-secret connection summaries so the UX layer can
+    // echo the destination account label in the confirmation gate and pick the
+    // right needsConnect / recovery copy. Maps the vault's richer
+    // ConnectionSummary down to the adapters' ConnectionInfo (no plaintext).
+    listConnections: async () => {
+      const rows = await store.listConnections(subject);
+      return rows.map((r) => ({
+        provider: r.provider,
+        providerAccountId: r.providerAccountId,
+        status: r.status,
+      }));
+    },
   };
 }
 

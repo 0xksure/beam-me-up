@@ -25,6 +25,7 @@
     "test:m9": "tsx test/m9.test.ts",
     "test:m10": "tsx test/m10.test.ts",
     "test:m11": "tsx test/m11.test.ts",
+    "test:m12": "tsx test/m12.test.ts",
     "vault:migrate": "tsx packages/vault/src/migrate.ts"
   },
   "devDependencies": {
