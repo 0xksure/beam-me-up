@@ -166,7 +166,13 @@ export function resolveVaultStore(): Promise<CredentialStore | null> {
     const crypto = new EnvelopeCrypto(kek);
     const pool = makePool();
     return createPgCredentialStore({ pool, crypto });
-  })();
+  })().catch((err: unknown) => {
+    // Never cache a REJECTED promise: a misconfig/transient build failure (e.g. a
+    // missing KEK or a bad connection string) must be retryable after the operator
+    // fixes the environment, not poison every later request until a restart.
+    vaultStorePromise = undefined;
+    throw err;
+  });
   return vaultStorePromise;
 }
 
@@ -268,7 +274,25 @@ export function createBeamHttpServer(opts?: { store?: CredentialStore }): Server
       // lacking a non-empty sub on the vault path is rejected (401 invalid_token):
       // buildCredentialContext throws on an empty/missing subject, and we map
       // that to a 401 so the vault is never keyed on a wildcard / clientId.
-      const store = await resolveStore();
+      let store: CredentialStore | null;
+      try {
+        store = await resolveStore();
+      } catch (err) {
+        // The vault is ACTIVE but its store could not be built (misconfig or a
+        // transient failure). Fail CLOSED with a 503 — never fall back to env
+        // creds when the vault is the source of truth — rather than letting the
+        // rejection escape the listener (which would hang the request, crash the
+        // process on an unhandled rejection, and poison the cached store).
+        process.stderr.write(`[beam-me-up] vault store unavailable: ${String(err)}\n`);
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: "vault_unavailable",
+            error_description: "The credential vault is temporarily unavailable.",
+          }),
+        );
+        return;
+      }
       if (store) {
         try {
           ctx = buildCredentialContext(store, {

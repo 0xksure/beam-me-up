@@ -30,7 +30,7 @@ import type { Server } from "node:http";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-import { createBeamHttpServer } from "@beam-me-up/server";
+import { createBeamHttpServer, resetVaultStoreForTests } from "@beam-me-up/server";
 import {
   createInMemoryCredentialStore,
   type CredentialStore,
@@ -114,6 +114,9 @@ const ENV_KEYS = [
   "UPSTASH_EMAIL",
   "UPSTASH_API_KEY",
   "BEAM_VAULT_DATABASE_URL",
+  "BEAM_KEK_LOCAL_SECRET",
+  "BEAM_KEK_PROVIDER",
+  "BEAM_TIER",
 ] as const;
 
 function snapshotEnv(): Record<string, string | undefined> {
@@ -391,6 +394,46 @@ async function testIsolation(): Promise<void> {
   }
 }
 
+/* ================================================================== */
+/* (e) vault store BUILD failure (active vault) -> fail-closed 503     */
+/* ================================================================== */
+
+async function testVaultBuildFailureIs503(): Promise<void> {
+  process.stdout.write("\n[e] vault store BUILD failure (active vault) -> 503, no env fallback, no hang\n");
+
+  const saved = snapshotEnv();
+  try {
+    clearEnv();
+    enableOAuth();
+    // The vault is ACTIVE (db url set) but its KEK is missing, so the store build
+    // (buildKekProvider) throws. Env provider creds are ALSO set: a wrong env
+    // fallback would surface them — the correct behaviour is a fail-closed 503.
+    process.env.BEAM_VAULT_DATABASE_URL = "postgres://dummy/db";
+    delete process.env.BEAM_KEK_LOCAL_SECRET; // local-dev KEK has no secret -> build throws
+    process.env.VERCEL_TOKEN = "env-vercel-must-not-leak";
+
+    resetVaultStoreForTests(); // drop any store cached by an earlier test
+
+    const server = createBeamHttpServer(); // NO injected store -> resolveVaultStore() from env
+    try {
+      const port = await listenEphemeral(server);
+
+      // A build failure must NOT hang the request or fall back to env creds.
+      const status1 = await initializeStatus(port, tokenFor("alice"));
+      check(status1 === 503, `vault build failure -> fail-closed 503 (not env creds, not a hang) (got ${status1})`);
+
+      // And the rejected build must not poison the path: a repeat is still a clean 503.
+      const status2 = await initializeStatus(port, tokenFor("alice"));
+      check(status2 === 503, `repeat after a build failure is still a clean 503 (got ${status2})`);
+    } finally {
+      await closeServer(server);
+      resetVaultStoreForTests();
+    }
+  } finally {
+    restoreEnv(saved);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -400,6 +443,7 @@ async function main(): Promise<void> {
   await testSubRejection();
   await testNoStoreUsesEnv();
   await testIsolation();
+  await testVaultBuildFailureIs503();
   process.stdout.write(`\nm11.test: PASS (${passCount} checks)\n`);
 }
 
